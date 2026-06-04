@@ -240,15 +240,27 @@ async def post_via_playwright(text: str, reply_to: str = None):
         await browser.close()
         return tweet_id or "published"
 
+async def post_thread(tweets: list):
+    """Publica un hilo: cada tweet responde al anterior"""
+    ids = []
+    reply_to = None
+    for i, text in enumerate(tweets):
+        if len(text) > 280: text = text[:277] + "..."
+        print(f"Tweet hilo {i+1}/{len(tweets)}: {text[:50]}...")
+        anti_ban_delay()
+        tweet_id = await post_via_playwright(text, reply_to)
+        ids.append(tweet_id)
+        reply_to = tweet_id
+        if i < len(tweets)-1:
+            time.sleep(random.uniform(3, 7))  # pausa entre tweets del hilo
+    return ids
+
 async def main():
     text     = os.environ.get("TWEET_TEXT", "").strip()
     reply_to = os.environ.get("REPLY_TO", "") or None
     action   = os.environ.get("ACTION", "tweet")
-
-    if not text:
-        print("ERROR: TWEET_TEXT vacio"); sys.exit(1)
-    if len(text) > 280:
-        text = text[:277] + "..."
+    # Para hilos: tweets separados por "---"
+    tweets_raw = os.environ.get("TWEETS_THREAD", "")
 
     if not check_hours():
         now = datetime.now(MADRID_TZ).strftime("%H:%M")
@@ -256,6 +268,28 @@ async def main():
         with open("result.json", "w") as f:
             json.dump({"status": "deferred", "hora": now}, f)
         sys.exit(0)
+
+    print(f"[{datetime.now(MADRID_TZ).strftime('%H:%M')} Madrid] Action={action}")
+
+    # HILO: publicar múltiples tweets en cadena
+    if action == "thread" and tweets_raw:
+        tweets = [t.strip() for t in tweets_raw.split("|||") if t.strip()]
+        if text: tweets = [text] + tweets
+        if not tweets: print("ERROR: sin tweets para hilo"); sys.exit(1)
+        print(f"Publicando hilo de {len(tweets)} tweets...")
+        anti_ban_delay()
+        ids = await post_thread(tweets)
+        url = f"https://x.com/DelphosInnova/status/{ids[0]}" if ids else ""
+        print(f"EXITO — hilo: {ids}")
+        with open("result.json", "w") as f:
+            json.dump({"tweet_ids": ids, "url": url, "count": len(ids)}, f)
+        sys.exit(0)
+
+    # TWEET SIMPLE
+    if not text:
+        print("ERROR: TWEET_TEXT vacio"); sys.exit(1)
+    if len(text) > 280:
+        text = text[:277] + "..."
 
     print(f"[{datetime.now(MADRID_TZ).strftime('%H:%M')} Madrid] Iniciando publicacion...")
     anti_ban_delay()
