@@ -1,11 +1,8 @@
 name: Post Tweet to X
 
 on:
-  # Disparado por n8n via API de GitHub
   repository_dispatch:
     types: [post_tweet, post_thread, post_retweet]
-
-  # También permite ejecución manual desde GitHub UI
   workflow_dispatch:
     inputs:
       tweet_text:
@@ -18,7 +15,7 @@ on:
 jobs:
   tweet:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -28,17 +25,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: requirements.txt
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install Python deps
+        run: pip install playwright pytz
 
-      - name: Post tweet
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Post tweet via Playwright
         env:
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
           X_CT0: ${{ secrets.X_CT0 }}
-          # Desde repository_dispatch (n8n)
           TWEET_TEXT: ${{ github.event.client_payload.text || github.event.inputs.tweet_text }}
           REPLY_TO: ${{ github.event.client_payload.reply_to || github.event.inputs.reply_to || '' }}
           ACTION: ${{ github.event.client_payload.action || 'tweet' }}

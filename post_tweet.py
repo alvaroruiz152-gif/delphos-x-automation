@@ -1,114 +1,156 @@
 #!/usr/bin/env python3
-# post_tweet.py - Publica un tweet en X usando cookies de sesion
-# Invocado por GitHub Actions via repository_dispatch desde n8n
+# post_tweet.py - Publica en X via Playwright (navegador real)
+# GitHub Actions: IP Microsoft Azure + Chrome real = sin detección de bot
 
 import os, json, asyncio, random, time, sys
 from datetime import datetime
 import pytz
-import httpx
 
 MADRID_TZ = pytz.timezone("Europe/Madrid")
-MAX_DAILY  = 50
-BEARER     = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-QUERY_ID   = "SoVnbfCycZ7fERGCwpZkYA"
 
-def get_cookies():
-    return {
-        "auth_token": os.environ["X_AUTH_TOKEN"],
-        "ct0":        os.environ["X_CT0"],
-    }
+def check_hours():
+    now = datetime.now(MADRID_TZ)
+    return 7 <= now.hour < 22
 
-def make_headers(cookies):
-    return {
-        "Authorization":             f"Bearer {BEARER}",
-        "x-csrf-token":              cookies["ct0"],
-        "x-twitter-auth-type":       "OAuth2Session",
-        "x-twitter-active-user":     "yes",
-        "x-twitter-client-language": "es",
-        "x-twitter-polling":         "true",
-        "Content-Type":              "application/json",
-        "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept":                    "*/*",
-        "Accept-Language":           "es-ES,es;q=0.9,en;q=0.8",
-        "Origin":                    "https://x.com",
-        "Referer":                   "https://x.com/",
-        "Sec-Fetch-Dest":            "empty",
-        "Sec-Fetch-Mode":            "cors",
-        "Sec-Fetch-Site":            "same-origin",
-    }
-
-FEATURES = {
-    "tweetypie_unmention_optimization_enabled": True,
-    "responsive_web_edit_tweet_api_enabled": True,
-    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-    "view_counts_everywhere_api_enabled": True,
-    "longform_notetweets_consumption_enabled": True,
-    "tweet_awards_web_tipping_enabled": False,
-    "longform_notetweets_rich_text_read_enabled": True,
-    "longform_notetweets_inline_media_enabled": True,
-    "rweb_video_timestamps_enabled": True,
-    "responsive_web_graphql_exclude_directive_enabled": True,
-    "verified_phone_label_enabled": False,
-    "freedom_of_speech_not_reach_fetch_enabled": True,
-    "standardized_nudges_misinfo": True,
-    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-    "interactive_text_enabled": True,
-    "responsive_web_text_conversations_enabled": False,
-    "responsive_web_graphql_timeline_navigation_enabled": True,
-    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-    "rweb_lists_timeline_redesign_enabled": True,
-}
-
-async def post_tweet(text: str, reply_to: str = None):
-    cookies = get_cookies()
-    variables = {
-        "tweet_text": text, "dark_request": False,
-        "media": {"media_entities": [], "possibly_sensitive": False},
-        "semantic_annotation_ids": [], "disallowed_reply_options": None,
-    }
-    if reply_to:
-        variables["reply"] = {"in_reply_to_tweet_id": reply_to, "exclude_reply_user_ids": []}
-
-    # Anti-ban delay
-    delay = random.uniform(2.0, 8.0)
-    print(f"Anti-ban delay: {delay:.1f}s")
+def anti_ban_delay():
+    delay = random.uniform(3.0, 9.0)
+    print(f"Delay: {delay:.1f}s")
     time.sleep(delay)
 
-    async with httpx.AsyncClient(cookies=cookies, timeout=20) as client:
-        resp = await client.post(
-            f"https://x.com/i/api/graphql/{QUERY_ID}/CreateTweet",
-            json={"variables": variables, "features": FEATURES, "queryId": QUERY_ID},
-            headers=make_headers(cookies)
+async def post_via_playwright(text: str, reply_to: str = None):
+    from playwright.async_api import async_playwright
+
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0        = os.environ["X_CT0"]
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox","--disable-dev-shm-usage",
+                  "--disable-blink-features=AutomationControlled"]
         )
-        body = resp.json()
-        if resp.status_code != 200 or "errors" in body:
-            raise Exception(f"HTTP {resp.status_code}: {json.dumps(body)[:300]}")
-        return body["data"]["create_tweet"]["tweet_results"]["result"]["rest_id"]
+        ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="es-ES",
+            viewport={"width":1280,"height":800},
+        )
+        # Ocultar que es headless
+        await ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+
+        # Cargar cookies de sesión (no necesita login)
+        await ctx.add_cookies([
+            {"name":"auth_token","value":auth_token,"domain":".x.com","path":"/","secure":True,"httpOnly":True,"sameSite":"None"},
+            {"name":"ct0","value":ct0,"domain":".x.com","path":"/","secure":True,"sameSite":"Lax"},
+        ])
+
+        page = await ctx.new_page()
+        page.set_default_timeout(30000)
+
+        # Abrir X
+        print("Abriendo x.com...")
+        await page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
+
+        # Verificar que estamos logueados
+        url = page.url
+        print(f"URL: {url}")
+        if "login" in url or "i/flow" in url:
+            raise Exception("Sesión expirada — actualiza las cookies")
+
+        # Si es reply, ir al tweet primero
+        if reply_to:
+            print(f"Abriendo tweet {reply_to} para responder...")
+            await page.goto(f"https://x.com/i/web/status/{reply_to}", wait_until="domcontentloaded")
+            await asyncio.sleep(2)
+            # Click en responder
+            reply_btn = page.locator('[data-testid="reply"]').first
+            await reply_btn.click()
+            await asyncio.sleep(1)
+        else:
+            # Click en el botón de redactar
+            compose_btn = page.locator('[data-testid="SideNav_NewTweet_Button"]').first
+            if await compose_btn.count() > 0:
+                await compose_btn.click()
+                await asyncio.sleep(1)
+
+        # Escribir el tweet en el editor
+        print(f"Escribiendo tweet: {text[:60]}...")
+        editor = page.locator('[data-testid="tweetTextarea_0"]').first
+        await editor.wait_for(state="visible", timeout=10000)
+        await editor.click()
+        await asyncio.sleep(0.5)
+
+        # Escribir carácter a carácter para simular humano
+        await page.keyboard.type(text, delay=random.randint(20, 60))
+        await asyncio.sleep(1)
+
+        # Verificar longitud
+        char_count = await page.evaluate("""
+            () => {
+                const el = document.querySelector('[data-testid="tweetTextarea_0"]');
+                return el ? el.textContent.length : 0;
+            }
+        """)
+        print(f"Caracteres escritos: {char_count}")
+
+        # Pulsar el botón de publicar
+        submit_btn = page.locator('[data-testid="tweetButtonInline"]').first
+        if await submit_btn.count() == 0:
+            submit_btn = page.locator('[data-testid="tweetButton"]').first
+        await submit_btn.wait_for(state="visible", timeout=5000)
+        await asyncio.sleep(0.5)
+        await submit_btn.click()
+        print("Tweet enviado, esperando confirmación...")
+        await asyncio.sleep(4)
+
+        # Obtener el ID del tweet publicado buscando en la timeline
+        tweet_id = None
+        try:
+            # Intentar obtener el ID del último tweet publicado
+            result = await page.evaluate("""
+                () => {
+                    const links = Array.from(document.querySelectorAll('a[href*="/status/"]'));
+                    for (const link of links) {
+                        const m = link.href.match(/status\\/([0-9]+)/);
+                        if (m) return m[1];
+                    }
+                    return null;
+                }
+            """)
+            tweet_id = result
+        except:
+            pass
+
+        await browser.close()
+        return tweet_id or "published"
 
 async def main():
-    # Leer parametros del entorno (pasados por n8n via repository_dispatch)
     text     = os.environ.get("TWEET_TEXT", "")
     reply_to = os.environ.get("REPLY_TO", "") or None
-    action   = os.environ.get("ACTION", "tweet")  # tweet | thread | retweet
+    action   = os.environ.get("ACTION", "tweet")
 
-    if not text and action == "tweet":
-        print("ERROR: TWEET_TEXT vacio")
-        sys.exit(1)
+    if not text:
+        print("ERROR: TWEET_TEXT vacío"); sys.exit(1)
 
-    # Verificar horario 07:00-22:00 Madrid
-    now = datetime.now(MADRID_TZ)
-    if not (7 <= now.hour < 22):
-        print(f"Fuera de horario ({now.strftime('%H:%M')} Madrid). Tweet ignorado.")
+    if len(text) > 280:
+        text = text[:277] + "..."
+
+    # Verificar horario
+    if not check_hours():
+        now = datetime.now(MADRID_TZ).strftime("%H:%M")
+        print(f"Fuera de horario ({now} Madrid, permitido 07:00-22:00). Tweet ignorado.")
+        with open("result.json","w") as f:
+            json.dump({"status":"deferred","reason":f"fuera de horario ({now})"}, f)
         sys.exit(0)
 
-    if action == "tweet":
-        print(f"Publicando tweet ({len(text)} chars): {text[:60]}...")
-        tweet_id = await post_tweet(text, reply_to)
-        url = f"https://x.com/DelphosInnova/status/{tweet_id}"
-        print(f"EXITO: {tweet_id}")
-        print(f"URL: {url}")
-        # Guardar resultado para n8n
-        with open("result.json", "w") as f:
-            json.dump({"tweet_id": tweet_id, "url": url, "text": text}, f)
+    print(f"Publicando: {text[:70]}...")
+    anti_ban_delay()
+
+    tweet_id = await post_via_playwright(text, reply_to)
+    url = f"https://x.com/DelphosInnova/status/{tweet_id}" if tweet_id != "published" else "https://x.com/DelphosInnova"
+    print(f"EXITO: {tweet_id}")
+    print(f"URL: {url}")
+    with open("result.json","w") as f:
+        json.dump({"tweet_id":tweet_id,"url":url,"text":text}, f)
 
 asyncio.run(main())
