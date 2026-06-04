@@ -1,0 +1,48 @@
+name: Post Tweet to X
+
+on:
+  # Disparado por n8n via API de GitHub
+  repository_dispatch:
+    types: [post_tweet, post_thread, post_retweet]
+
+  # También permite ejecución manual desde GitHub UI
+  workflow_dispatch:
+    inputs:
+      tweet_text:
+        description: 'Texto del tweet'
+        required: true
+      reply_to:
+        description: 'ID del tweet al que responder (opcional)'
+        required: false
+
+jobs:
+  tweet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install httpx pytz
+
+      - name: Post tweet
+        env:
+          X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
+          X_CT0: ${{ secrets.X_CT0 }}
+          # Desde repository_dispatch (n8n)
+          TWEET_TEXT: ${{ github.event.client_payload.text || github.event.inputs.tweet_text }}
+          REPLY_TO: ${{ github.event.client_payload.reply_to || github.event.inputs.reply_to || '' }}
+          ACTION: ${{ github.event.client_payload.action || 'tweet' }}
+        run: python post_tweet.py
+
+      - name: Show result
+        if: always()
+        run: cat result.json 2>/dev/null || echo "Sin resultado"
