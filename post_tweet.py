@@ -129,13 +129,24 @@ async def post_via_playwright(text: str, reply_to: str = None):
                     pass
 
         if not submit_btn:
-            # Tomar screenshot para debug
             await page.screenshot(path="/tmp/debug_tweet.png")
             raise Exception("No se encontro el boton de publicar habilitado")
 
         print("Publicando...")
-        await submit_btn.click()
-        await asyncio.sleep(4)
+        # force=True para ignorar overlays (popups de cookies, etc.)
+        try:
+            await submit_btn.click(force=True, timeout=10000)
+        except Exception:
+            # Fallback: click via JavaScript
+            print("Fallback: click via JS")
+            await page.evaluate("""
+                () => {
+                    const btn = document.querySelector('[data-testid="tweetButtonInline"]')
+                             || document.querySelector('[data-testid="tweetButton"]');
+                    if (btn) btn.click();
+                }
+            """)
+        await asyncio.sleep(5)
 
         # Obtener el ID del tweet publicado
         try:
