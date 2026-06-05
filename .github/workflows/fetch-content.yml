@@ -38,6 +38,7 @@ jobs:
           X_CT0: ${{ secrets.X_CT0 }}
           FETCH_MODE: ${{ github.event.client_payload.mode || github.event.inputs.mode || 'mentions' }}
           ACCOUNT: ${{ github.event.client_payload.account || github.event.inputs.account || '' }}
+          N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
         run: python fetch_content.py
 
       - name: Upload result artifact
