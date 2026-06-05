@@ -1,0 +1,51 @@
+name: Fetch X Content
+
+on:
+  repository_dispatch:
+    types: [fetch_mentions, fetch_account_tweets]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'mentions or account_tweets'
+        required: true
+        default: 'mentions'
+      account:
+        description: 'Account for account_tweets mode'
+        required: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install httpx
+
+      - name: Fetch content
+        env:
+          X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
+          X_CT0: ${{ secrets.X_CT0 }}
+          FETCH_MODE: ${{ github.event.client_payload.mode || github.event.inputs.mode || 'mentions' }}
+          ACCOUNT: ${{ github.event.client_payload.account || github.event.inputs.account || '' }}
+        run: python fetch_content.py
+
+      - name: Upload result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetch-result-${{ github.run_id }}
+          path: result.json
+          retention-days: 1
+
+      - name: Print result
+        run: cat result.json
