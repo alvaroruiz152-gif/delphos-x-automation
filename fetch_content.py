@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+# fetch_content.py - httpx-based X search via GitHub Actions runner (non-blocked IP)
+import os, json, sys
+import httpx
+
+BEARER = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+QUERY_ID_SEARCH = "-TFXKoMnMTKdEXcCn-eahw"
+
+FEATURES = json.dumps({
+    "rweb_tipjar_consumption_enabled": True,
+    "responsive_web_graphql_exclude_directive_enabled": True,
+    "verified_phone_label_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "tweet_awards_web_tipping_enabled": False,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "rweb_video_timestamps_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+})
+
+def make_headers(ct0):
+    return {
+        "Authorization": "Bearer " + BEARER,
+        "x-csrf-token": ct0,
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "es",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Origin": "https://x.com",
+        "Referer": "https://x.com/",
+    }
+
+def search(auth_token, ct0, query, count=10):
+    cookies = {"auth_token": auth_token, "ct0": ct0}
+    variables = json.dumps({"rawQuery": query, "count": count, "product": "Latest", "querySource": ""})
+    with httpx.Client(cookies=cookies, timeout=30, follow_redirects=True) as client:
+        resp = client.get(
+            "https://x.com/i/api/graphql/" + QUERY_ID_SEARCH + "/SearchTimeline",
+            params={"variables": variables, "features": FEATURES},
+            headers=make_headers(ct0)
+        )
+    print("HTTP", resp.status_code)
+    if resp.status_code != 200:
+        print("Error:", resp.text[:300])
+        return []
+    body = resp.json()
+    tweets = []
+    try:
+        instructions = (body.get("data",{}).get("search_by_raw_query",{})
+                           .get("search_timeline",{}).get("timeline",{}).get("instructions",[]))
+        for instr in instructions:
+            if instr.get("type") != "TimelineAddEntries": continue
+            for entry in instr.get("entries",[]):
+                if not entry.get("entryId","").startswith("tweet-"): continue
+                try:
+                    result = entry["content"]["itemContent"]["tweet_results"]["result"]
+                    legacy = result.get("legacy") or result.get("tweet",{}).get("legacy",{})
+                    user_legacy = (result.get("core",{}).get("user_results",{})
+                                   .get("result",{}).get("legacy",{}))
+                    screen_name = user_legacy.get("screen_name","unknown")
+                    tweet_id = result.get("rest_id") or legacy.get("id_str","")
+                    text = legacy.get("full_text","")
+                    if not tweet_id: continue
+                    tweets.append({"tweet_id": tweet_id, "author": screen_name, "text": text,
+                                   "url": "https://x.com/"+screen_name+"/status/"+tweet_id})
+                except:
+                    continue
+    except Exception as e:
+        print("Parse error:", e)
+    return tweets
+
+def main():
+    mode = os.environ.get("FETCH_MODE","mentions")
+    auth_token = os.environ.get("X_AUTH_TOKEN","")
+    ct0 = os.environ.get("X_CT0","")
+
+    if mode == "mentions":
+        query = "@DelphosInnova -from:DelphosInnova -filter:retweets"
+        tweets = search(auth_token, ct0, query, 10)
+        mentions = [t for t in tweets if t["author"].lower() not in ("delphosinova","delphosinnovacion")]
+        print("Mentions found:", len(mentions))
+        with open("result.json","w") as f:
+            json.dump({"mentions": mentions, "count": len(mentions)}, f)
+
+    elif mode == "account_tweets":
+        account = os.environ.get("ACCOUNT","cdti_es").lstrip("@")
+        query = "from:" + account + " -filter:retweets -filter:replies"
+        tweets = search(auth_token, ct0, query, 5)
+        print("Tweets from @"+account+":", len(tweets))
+        with open("result.json","w") as f:
+            json.dump({"tweets": tweets, "account": account, "count": len(tweets)}, f)
+
+    else:
+        print("Unknown mode:", mode)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
