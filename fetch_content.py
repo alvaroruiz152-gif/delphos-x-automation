@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fetch_content.py - httpx-based X search via GitHub Actions runner (non-blocked IP)
+# fetch_content.py v2 - X search via GitHub Actions runner + n8n webhook callback
 import os, json, sys
 import httpx
 
@@ -84,26 +84,56 @@ def search(auth_token, ct0, query, count=10):
         print("Parse error:", e)
     return tweets
 
+def post_to_webhook(n8n_webhook, path, payload):
+    url = n8n_webhook.rstrip("/") + "/" + path
+    try:
+        with httpx.Client(timeout=15) as client:
+            r = client.post(url, json=payload)
+            print(f"Webhook {path}: HTTP {r.status_code}")
+            return r.status_code
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return 0
+
 def main():
     mode = os.environ.get("FETCH_MODE","mentions")
     auth_token = os.environ.get("X_AUTH_TOKEN","")
     ct0 = os.environ.get("X_CT0","")
+    n8n_webhook = os.environ.get("N8N_WEBHOOK","https://n8n.teamworkz.co/webhook")
 
     if mode == "mentions":
         query = "@DelphosInnova -from:DelphosInnova -filter:retweets"
         tweets = search(auth_token, ct0, query, 10)
-        mentions = [t for t in tweets if t["author"].lower() not in ("delphosinova","delphosinnovacion")]
+        mentions = [t for t in tweets if t["author"].lower() not in ("delphosinova","delphosinnovacion","delphosinova1")]
         print("Mentions found:", len(mentions))
+        result = {"mentions": mentions, "count": len(mentions)}
         with open("result.json","w") as f:
-            json.dump({"mentions": mentions, "count": len(mentions)}, f)
+            json.dump(result, f)
+        # POST each mention to n8n Webhook Mencion
+        for m in mentions[:3]:  # max 3 mentions per run to avoid spam
+            post_to_webhook(n8n_webhook, "f09-mencion", {
+                "tweet_url": m["url"],
+                "tweet_text": m["text"],
+                "author": m["author"],
+                "tweet_id": m["tweet_id"]
+            })
 
     elif mode == "account_tweets":
         account = os.environ.get("ACCOUNT","cdti_es").lstrip("@")
         query = "from:" + account + " -filter:retweets -filter:replies"
         tweets = search(auth_token, ct0, query, 5)
         print("Tweets from @"+account+":", len(tweets))
+        result = {"tweets": tweets, "account": account, "count": len(tweets)}
         with open("result.json","w") as f:
-            json.dump({"tweets": tweets, "account": account, "count": len(tweets)}, f)
+            json.dump(result, f)
+        # POST first tweet to n8n Webhook Retweet
+        if tweets:
+            post_to_webhook(n8n_webhook, "f09-retweet", {
+                "tweet_id": tweets[0]["tweet_id"],
+                "tweet_url": tweets[0]["url"],
+                "author": tweets[0]["author"],
+                "text": tweets[0]["text"]
+            })
 
     else:
         print("Unknown mode:", mode)
