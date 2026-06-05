@@ -255,6 +255,35 @@ async def post_thread(tweets: list):
             time.sleep(random.uniform(3, 7))  # pausa entre tweets del hilo
     return ids
 
+
+async def retweet_via_playwright(tweet_id):
+    from playwright.async_api import async_playwright
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0 = os.environ["X_CT0"]
+    ua = random.choice(USER_AGENTS)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        ctx = await browser.new_context(user_agent=ua, viewport=random.choice(VIEWPORTS),
+            extra_http_headers={"Accept-Language":"es-ES,es;q=0.9,en;q=0.8"})
+        ctx.add_cookies([
+            {"name":"auth_token","value":auth_token,"domain":".x.com","path":"/"},
+            {"name":"ct0","value":ct0,"domain":".x.com","path":"/"}
+        ])
+        page = await ctx.new_page()
+        await page.goto("https://x.com/i/web/status/"+tweet_id, wait_until="domcontentloaded", timeout=30000)
+        micro_delay()
+        try:
+            rt_btn = page.locator("[data-testid=\"retweet\"]").first
+            await rt_btn.click()
+            await page.wait_for_timeout(1500)
+            confirm = page.locator("[data-testid=\"retweetConfirm\"]").first
+            await confirm.click()
+            await page.wait_for_timeout(2000)
+            print("Retweet OK: "+tweet_id)
+        except Exception as e:
+            print("Retweet error: "+str(e))
+        await browser.close()
+    return "ok"
 async def main():
     text     = os.environ.get("TWEET_TEXT", "").strip()
     reply_to = os.environ.get("REPLY_TO", "") or None
@@ -283,6 +312,21 @@ async def main():
         print(f"EXITO — hilo: {ids}")
         with open("result.json", "w") as f:
             json.dump({"tweet_ids": ids, "url": url, "count": len(ids)}, f)
+        sys.exit(0)
+
+    # RETWEET
+    if action == "retweet":
+        import re
+        tweet_url = os.environ.get("TWEET_URL", "") or text
+        m = re.search(r"/status/(\d+)", tweet_url)
+        tweet_id = m.group(1) if m else None
+        if not tweet_id:
+            print("ERROR: no tweet_id para retweet"); sys.exit(1)
+        print("Retweeteando "+tweet_id)
+        anti_ban_delay()
+        result = await retweet_via_playwright(tweet_id)
+        with open("result.json", "w") as f:
+            json.dump({"status": "retweeted", "tweet_id": tweet_id}, f)
         sys.exit(0)
 
     # TWEET SIMPLE
