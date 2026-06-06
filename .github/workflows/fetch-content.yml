@@ -2,15 +2,18 @@ name: Fetch X Content
 
 on:
   repository_dispatch:
-    types: [fetch_mentions, fetch_account_tweets]
+    types: [fetch_mentions, fetch_account_tweets, do_retweet]
   workflow_dispatch:
     inputs:
       mode:
-        description: 'mentions or account_tweets'
+        description: 'mentions, account_tweets, or do_retweet'
         required: true
         default: 'mentions'
       account:
         description: 'Account for account_tweets mode'
+        required: false
+      tweet_id:
+        description: 'Tweet ID for do_retweet mode'
         required: false
 
 jobs:
@@ -38,6 +41,7 @@ jobs:
           X_CT0: ${{ secrets.X_CT0 }}
           FETCH_MODE: ${{ github.event.client_payload.mode || github.event.inputs.mode || 'mentions' }}
           ACCOUNT: ${{ github.event.client_payload.account || github.event.inputs.account || '' }}
+          TWEET_ID: ${{ github.event.client_payload.tweet_id || github.event.inputs.tweet_id || '' }}
           N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
         run: python fetch_content.py
 

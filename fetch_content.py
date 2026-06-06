@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fetch_content.py v3 - mentions via GraphQL, account_tweets via Nitter RSS + twikit retweet
+# fetch_content.py v4 - mentions via GraphQL; do_retweet via twikit (tweet_id from n8n)
 import os, json, sys, re
 import httpx
 
@@ -84,96 +84,8 @@ def search(auth_token, ct0, query, count=10):
         print("Parse error:", e)
     return tweets
 
-# Nitter instances to try in order (fallback mechanism)
-NITTER_INSTANCES = [
-    "https://nitter.poast.org",
-    "https://nitter.privacydev.net",
-    "https://nitter.net",
-    "https://xcancel.com",
-]
-
-def fetch_rss_tweets(account, max_items=5):
-    """Fetch latest tweets from account via Nitter RSS, trying multiple instances."""
-    for instance in NITTER_INSTANCES:
-        rss_url = f"{instance}/{account}/rss"
-        print(f"Trying RSS: {rss_url}")
-        try:
-            with httpx.Client(timeout=15, follow_redirects=True,
-                              headers={"User-Agent": "FeedFetcher-Google; (+http://www.google.com/feedfetcher.html)",
-                                       "Accept": "application/rss+xml, application/xml, */*"}) as client:
-                resp = client.get(rss_url)
-            print(f"  HTTP {resp.status_code}, len={len(resp.text)}")
-            xml = resp.text
-            # Accept 200 or 403 (some Nitter instances return 403 but still serve RSS)
-            # Reject if explicitly blocked or has no items
-            if resp.status_code not in (200, 403):
-                continue
-            if "not yet whitelisted" in xml or "<item>" not in xml:
-                print("  Blocked or empty feed, trying next instance")
-                continue
-        except Exception as e:
-            print(f"  Error: {e}")
-            continue
-
-        tweets = []
-        pos = 0
-        while len(tweets) < max_items:
-            item_pos = xml.find('<item>', pos)
-            if item_pos == -1:
-                break
-            item_end = xml.find('</item>', item_pos)
-            if item_end == -1:
-                break
-            item = xml[item_pos:item_end + 7]
-
-            # link / guid → tweet URL
-            link = ""
-            ls = item.find('<link>') + 6
-            le = item.find('</link>')
-            if ls > 5 and le > ls:
-                link = item[ls:le].strip()
-            if not link:
-                gs = item.find('<guid>') + 6
-                ge = item.find('</guid>')
-                if gs > 5 and ge > gs:
-                    link = item[gs:ge].strip()
-
-            # Normalize to x.com URL
-            link = re.sub(r'https?://[^/]+/', 'https://x.com/', link)
-
-            # title → tweet text
-            ts = item.find('<title>') + 7
-            te = item.find('</title>')
-            text = ""
-            if ts > 6 and te > ts:
-                text = item[ts:te].replace('<![CDATA[', '').replace(']]>', '').strip()
-                text = re.sub(r'<[^>]+>', '', text).strip()
-
-            # Extract tweet_id
-            try:
-                parts = link.rstrip('/').split('/')
-                si = parts.index('status')
-                tweet_id = parts[si + 1].split('?')[0]
-                if tweet_id and text:
-                    tweets.append({
-                        "tweet_id": tweet_id,
-                        "author": account,
-                        "text": text,
-                        "url": f"https://x.com/{account}/status/{tweet_id}"
-                    })
-            except (ValueError, IndexError):
-                pass
-            pos = item_end + 7
-
-        if tweets:
-            print(f"  ✅ Got {len(tweets)} tweets from {instance}")
-            return tweets
-
-    print("No tweets found from any Nitter instance")
-    return []
-
 def do_retweet_twikit(auth_token, ct0, tweet_id):
-    """Retweet from GitHub Actions using twikit (bypasses VPS IP block)."""
+    """Retweet using twikit from GitHub Actions (no VPS IP block)."""
     try:
         import asyncio
         from twikit import Client
@@ -185,28 +97,16 @@ def do_retweet_twikit(auth_token, ct0, tweet_id):
             return True
 
         asyncio.run(_retweet())
-        print(f"✅ Retweeted tweet {tweet_id}")
+        print(f"Retweeted tweet {tweet_id}")
         return True
     except Exception as e:
         print(f"Twikit retweet error: {e}")
         return False
 
-def post_to_webhook(n8n_webhook, path, payload):
-    url = n8n_webhook.rstrip("/") + "/" + path
-    try:
-        with httpx.Client(timeout=15) as client:
-            r = client.post(url, json=payload)
-            print(f"Webhook {path}: HTTP {r.status_code}")
-            return r.status_code
-    except Exception as e:
-        print(f"Webhook error: {e}")
-        return 0
-
 def main():
     mode = os.environ.get("FETCH_MODE", "mentions")
     auth_token = os.environ.get("X_AUTH_TOKEN", "")
     ct0 = os.environ.get("X_CT0", "")
-    n8n_webhook = os.environ.get("N8N_WEBHOOK", "https://n8n.teamworkz.co/webhook")
 
     if mode == "mentions":
         query = "@DelphosInnova -from:DelphosInnova -filter:retweets"
@@ -216,43 +116,48 @@ def main():
         result = {"mentions": mentions, "count": len(mentions)}
         with open("result.json", "w") as f:
             json.dump(result, f)
+        n8n_webhook = os.environ.get("N8N_WEBHOOK", "https://n8n.teamworkz.co/webhook")
         for m in mentions[:3]:
-            post_to_webhook(n8n_webhook, "f09-mencion", {
-                "tweet_url": m["url"],
-                "tweet_text": m["text"],
-                "author": m["author"],
-                "tweet_id": m["tweet_id"]
-            })
+            try:
+                with httpx.Client(timeout=15) as client:
+                    client.post(n8n_webhook.rstrip("/") + "/f09-mencion", json={
+                        "tweet_url": m["url"],
+                        "tweet_text": m["text"],
+                        "author": m["author"],
+                        "tweet_id": m["tweet_id"]
+                    })
+            except Exception as e:
+                print(f"Webhook error: {e}")
 
-    elif mode == "account_tweets":
-        account = os.environ.get("ACCOUNT", "cdti_es").lstrip("@")
-        tweets = fetch_rss_tweets(account, max_items=5)
-        print(f"Tweets from @{account}: {len(tweets)}")
-
-        retweeted = False
-        if tweets and auth_token and ct0:
-            # Retweet from GitHub Actions — no VPS IP block issue
-            retweeted = do_retweet_twikit(auth_token, ct0, tweets[0]["tweet_id"])
-
-        result = {"tweets": tweets, "account": account, "count": len(tweets), "retweeted": retweeted}
+    elif mode == "do_retweet":
+        tweet_id = os.environ.get("TWEET_ID", "").strip()
+        account = os.environ.get("ACCOUNT", "").strip()
+        print(f"do_retweet: tweet_id={tweet_id} account={account}")
+        if not tweet_id:
+            print("ERROR: TWEET_ID not set")
+            result = {"retweeted": False, "error": "TWEET_ID not set"}
+        elif not auth_token or not ct0:
+            print("ERROR: X_AUTH_TOKEN or X_CT0 not set")
+            result = {"retweeted": False, "error": "missing auth credentials"}
+        else:
+            retweeted = do_retweet_twikit(auth_token, ct0, tweet_id)
+            result = {"tweet_id": tweet_id, "account": account, "retweeted": retweeted}
         with open("result.json", "w") as f:
             json.dump(result, f)
 
-        # Notify n8n (for Telegram confirmation)
-        if tweets:
-            t = tweets[0]
-            post_to_webhook(n8n_webhook, "f09-retweet", {
-                "tweet_id": t["tweet_id"],
-                "tweet_url": t["url"],
-                "author": t["author"],
-                "text": t["text"],
-                "retweeted": retweeted
-            })
-        else:
-            print("No tweets to retweet")
+    # account_tweets mode kept for backward compat but no longer dispatched from n8n
+    elif mode == "account_tweets":
+        account = os.environ.get("ACCOUNT", "cdti_es").lstrip("@")
+        print(f"account_tweets mode for @{account} — this mode is deprecated, use do_retweet instead")
+        result = {"tweets": [], "account": account, "count": 0, "note": "deprecated mode"}
+        with open("result.json", "w") as f:
+            json.dump(result, f)
 
     else:
         print("Unknown mode:", mode)
+        result = {"error": f"unknown mode: {mode}"}
+        with open("result.json", "w") as f:
+            json.dump(result, f)
         sys.exit(1)
 
 if __name__ == "__main__":
