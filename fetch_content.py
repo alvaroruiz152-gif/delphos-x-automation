@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# fetch_content.py v4 - mentions via GraphQL; do_retweet via twikit (tweet_id from n8n)
-import os, json, sys, re
+# fetch_content.py v6 - mentions, do_retweet, do_quote_tweet, do_reply
+import os, json, sys
 import httpx
 
 BEARER = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
@@ -85,22 +85,48 @@ def search(auth_token, ct0, query, count=10):
     return tweets
 
 def do_retweet_twikit(auth_token, ct0, tweet_id):
-    """Retweet using twikit from GitHub Actions (no VPS IP block)."""
     try:
         import asyncio
         from twikit import Client
-
         async def _retweet():
-            client = Client('es-ES')
-            client.set_cookies({'auth_token': auth_token, 'ct0': ct0})
+            client = Client("es-ES")
+            client.set_cookies({"auth_token": auth_token, "ct0": ct0})
             await client.retweet(tweet_id)
-            return True
-
         asyncio.run(_retweet())
-        print(f"Retweeted tweet {tweet_id}")
+        print(f"Retweeted {tweet_id}")
         return True
     except Exception as e:
-        print(f"Twikit retweet error: {e}")
+        print(f"Retweet error: {e}")
+        return False
+
+def do_quote_tweet_twikit(auth_token, ct0, tweet_id, comment):
+    try:
+        import asyncio
+        from twikit import Client
+        async def _quote():
+            client = Client("es-ES")
+            client.set_cookies({"auth_token": auth_token, "ct0": ct0})
+            await client.create_tweet(text=comment, quote_tweet_id=tweet_id)
+        asyncio.run(_quote())
+        print(f"Quote tweet done: {tweet_id}")
+        return True
+    except Exception as e:
+        print(f"Quote tweet error: {e}")
+        return False
+
+def do_reply_twikit(auth_token, ct0, tweet_id, reply_text):
+    try:
+        import asyncio
+        from twikit import Client
+        async def _reply():
+            client = Client("es-ES")
+            client.set_cookies({"auth_token": auth_token, "ct0": ct0})
+            await client.create_tweet(text=reply_text, reply_to=tweet_id)
+        asyncio.run(_reply())
+        print(f"Replied to {tweet_id}")
+        return True
+    except Exception as e:
+        print(f"Reply error: {e}")
         return False
 
 def main():
@@ -111,7 +137,8 @@ def main():
     if mode == "mentions":
         query = "@DelphosInnova -from:DelphosInnova -filter:retweets"
         tweets = search(auth_token, ct0, query, 10)
-        mentions = [t for t in tweets if t["author"].lower() not in ("delphosinova", "delphosinnovacion", "delphosinova1")]
+        mentions = [t for t in tweets if t["author"].lower() not in
+                    ("delphosinova", "delphosinnovacion", "delphosinova1")]
         print("Mentions found:", len(mentions))
         result = {"mentions": mentions, "count": len(mentions)}
         with open("result.json", "w") as f:
@@ -121,10 +148,8 @@ def main():
             try:
                 with httpx.Client(timeout=15) as client:
                     client.post(n8n_webhook.rstrip("/") + "/f09-mencion", json={
-                        "tweet_url": m["url"],
-                        "tweet_text": m["text"],
-                        "author": m["author"],
-                        "tweet_id": m["tweet_id"]
+                        "tweet_url": m["url"], "tweet_text": m["text"],
+                        "author": m["author"], "tweet_id": m["tweet_id"]
                     })
             except Exception as e:
                 print(f"Webhook error: {e}")
@@ -134,31 +159,50 @@ def main():
         account = os.environ.get("ACCOUNT", "").strip()
         print(f"do_retweet: tweet_id={tweet_id} account={account}")
         if not tweet_id:
-            print("ERROR: TWEET_ID not set")
             result = {"retweeted": False, "error": "TWEET_ID not set"}
         elif not auth_token or not ct0:
-            print("ERROR: X_AUTH_TOKEN or X_CT0 not set")
-            result = {"retweeted": False, "error": "missing auth credentials"}
+            result = {"retweeted": False, "error": "missing auth"}
         else:
             retweeted = do_retweet_twikit(auth_token, ct0, tweet_id)
             result = {"tweet_id": tweet_id, "account": account, "retweeted": retweeted}
         with open("result.json", "w") as f:
             json.dump(result, f)
 
-    # account_tweets mode kept for backward compat but no longer dispatched from n8n
-    elif mode == "account_tweets":
-        account = os.environ.get("ACCOUNT", "cdti_es").lstrip("@")
-        print(f"account_tweets mode for @{account} — this mode is deprecated, use do_retweet instead")
-        result = {"tweets": [], "account": account, "count": 0, "note": "deprecated mode"}
+    elif mode == "do_quote_tweet":
+        tweet_id = os.environ.get("TWEET_ID", "").strip()
+        comment = os.environ.get("QUOTE_TEXT", "").strip()
+        account = os.environ.get("ACCOUNT", "").strip()
+        print(f"do_quote_tweet: tweet_id={tweet_id} account={account}")
+        if not tweet_id or not comment:
+            result = {"done": False, "error": "TWEET_ID or QUOTE_TEXT not set"}
+        elif not auth_token or not ct0:
+            result = {"done": False, "error": "missing auth"}
+        else:
+            done = do_quote_tweet_twikit(auth_token, ct0, tweet_id, comment)
+            result = {"tweet_id": tweet_id, "account": account, "done": done}
+        with open("result.json", "w") as f:
+            json.dump(result, f)
+
+    elif mode == "do_reply":
+        reply_tweet_id = os.environ.get("REPLY_TWEET_ID", "").strip()
+        reply_text = os.environ.get("REPLY_TEXT", "").strip()
+        account = os.environ.get("ACCOUNT", "").strip()
+        print(f"do_reply: reply_tweet_id={reply_tweet_id} account=@{account}")
+        if not reply_tweet_id or not reply_text:
+            result = {"done": False, "error": "REPLY_TWEET_ID or REPLY_TEXT not set"}
+        elif not auth_token or not ct0:
+            result = {"done": False, "error": "missing auth"}
+        else:
+            done = do_reply_twikit(auth_token, ct0, reply_tweet_id, reply_text)
+            result = {"reply_tweet_id": reply_tweet_id, "account": account, "done": done}
         with open("result.json", "w") as f:
             json.dump(result, f)
 
     else:
         print("Unknown mode:", mode)
-        result = {"error": f"unknown mode: {mode}"}
+        result = {"error": "unknown mode: " + mode}
         with open("result.json", "w") as f:
             json.dump(result, f)
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()
