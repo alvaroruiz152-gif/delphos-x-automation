@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# fetch_content.py v2 - X search via GitHub Actions runner + n8n webhook callback
-import os, json, sys
+# fetch_content.py v3 - mentions via GraphQL, account_tweets via xcancel RSS
+import os, json, sys, re
 import httpx
 
 BEARER = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
@@ -84,6 +84,71 @@ def search(auth_token, ct0, query, count=10):
         print("Parse error:", e)
     return tweets
 
+def fetch_rss_tweets(account, max_items=5):
+    """Fetch latest tweets from an account via xcancel.com RSS (no auth needed)."""
+    rss_url = f"https://xcancel.com/{account}/rss"
+    print(f"Fetching RSS: {rss_url}")
+    try:
+        with httpx.Client(timeout=20, follow_redirects=True) as client:
+            resp = client.get(rss_url, headers={"User-Agent": "Mozilla/5.0"})
+        print(f"RSS HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            return []
+        xml = resp.text
+    except Exception as e:
+        print(f"RSS fetch error: {e}")
+        return []
+
+    tweets = []
+    pos = 0
+    while len(tweets) < max_items:
+        item_pos = xml.find('<item>', pos)
+        if item_pos == -1:
+            break
+        item_end = xml.find('</item>', item_pos)
+        if item_end == -1:
+            break
+        item = xml[item_pos:item_end + 7]
+
+        # link / guid → tweet URL
+        link = ""
+        ls = item.find('<link>') + 6
+        le = item.find('</link>')
+        if ls > 5 and le > ls:
+            link = item[ls:le].strip()
+        if not link:
+            gs = item.find('<guid>') + 6
+            ge = item.find('</guid>')
+            if gs > 5 and ge > gs:
+                link = item[gs:ge].strip()
+
+        # title → tweet text
+        ts = item.find('<title>') + 7
+        te = item.find('</title>')
+        text = ""
+        if ts > 6 and te > ts:
+            text = item[ts:te].replace('<![CDATA[', '').replace(']]>', '').strip()
+            text = re.sub(r'<[^>]+>', '', text).strip()
+
+        # Extract tweet_id from URL
+        try:
+            parts = link.rstrip('/').split('/')
+            si = parts.index('status')
+            tweet_id = parts[si + 1].split('?')[0]
+            if tweet_id and text:
+                tweets.append({
+                    "tweet_id": tweet_id,
+                    "author": account,
+                    "text": text,
+                    "url": f"https://x.com/{account}/status/{tweet_id}"
+                })
+        except (ValueError, IndexError):
+            pass
+
+        pos = item_end + 7
+
+    return tweets
+
 def post_to_webhook(n8n_webhook, path, payload):
     url = n8n_webhook.rstrip("/") + "/" + path
     try:
@@ -96,10 +161,10 @@ def post_to_webhook(n8n_webhook, path, payload):
         return 0
 
 def main():
-    mode = os.environ.get("FETCH_MODE","mentions")
-    auth_token = os.environ.get("X_AUTH_TOKEN","")
-    ct0 = os.environ.get("X_CT0","")
-    n8n_webhook = os.environ.get("N8N_WEBHOOK","https://n8n.teamworkz.co/webhook")
+    mode = os.environ.get("FETCH_MODE", "mentions")
+    auth_token = os.environ.get("X_AUTH_TOKEN", "")
+    ct0 = os.environ.get("X_CT0", "")
+    n8n_webhook = os.environ.get("N8N_WEBHOOK", "https://n8n.teamworkz.co/webhook")
 
     if mode == "mentions":
         query = "@DelphosInnova -from:DelphosInnova -filter:retweets"
@@ -107,10 +172,9 @@ def main():
         mentions = [t for t in tweets if t["author"].lower() not in ("delphosinova","delphosinnovacion","delphosinova1")]
         print("Mentions found:", len(mentions))
         result = {"mentions": mentions, "count": len(mentions)}
-        with open("result.json","w") as f:
+        with open("result.json", "w") as f:
             json.dump(result, f)
-        # POST each mention to n8n Webhook Mencion
-        for m in mentions[:3]:  # max 3 mentions per run to avoid spam
+        for m in mentions[:3]:
             post_to_webhook(n8n_webhook, "f09-mencion", {
                 "tweet_url": m["url"],
                 "tweet_text": m["text"],
@@ -119,20 +183,20 @@ def main():
             })
 
     elif mode == "account_tweets":
-        account = os.environ.get("ACCOUNT","cdti_es").lstrip("@")
-        query = "from:" + account + " -filter:retweets -filter:replies"
-        tweets = search(auth_token, ct0, query, 5)
-        print("Tweets from @"+account+":", len(tweets))
+        # Use xcancel.com RSS — no auth needed, no query_id expiry issues
+        account = os.environ.get("ACCOUNT", "cdti_es").lstrip("@")
+        tweets = fetch_rss_tweets(account, max_items=5)
+        print(f"Tweets from @{account}: {len(tweets)}")
         result = {"tweets": tweets, "account": account, "count": len(tweets)}
-        with open("result.json","w") as f:
+        with open("result.json", "w") as f:
             json.dump(result, f)
-        # POST first tweet to n8n Webhook Retweet
         if tweets:
+            t = tweets[0]
             post_to_webhook(n8n_webhook, "f09-retweet", {
-                "tweet_id": tweets[0]["tweet_id"],
-                "tweet_url": tweets[0]["url"],
-                "author": tweets[0]["author"],
-                "text": tweets[0]["text"]
+                "tweet_id": t["tweet_id"],
+                "tweet_url": t["url"],
+                "author": t["author"],
+                "text": t["text"]
             })
 
     else:
