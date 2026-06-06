@@ -2,18 +2,18 @@ name: Fetch X Content
 
 on:
   repository_dispatch:
-    types: [fetch_mentions, fetch_account_tweets, do_retweet]
+    types: [fetch_mentions, fetch_account_tweets, do_retweet, do_quote_tweet]
   workflow_dispatch:
     inputs:
       mode:
-        description: 'mentions, account_tweets, or do_retweet'
+        description: 'mentions | do_retweet | do_quote_tweet'
         required: true
         default: 'mentions'
-      account:
-        description: 'Account for account_tweets mode'
-        required: false
       tweet_id:
-        description: 'Tweet ID for do_retweet mode'
+        description: 'Tweet ID (for do_retweet / do_quote_tweet)'
+        required: false
+      quote_text:
+        description: 'Comment text (for do_quote_tweet)'
         required: false
 
 jobs:
@@ -35,20 +35,21 @@ jobs:
       - name: Install deps
         run: pip install httpx twikit
 
-      - name: Fetch content
+      - name: Run
         env:
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
           X_CT0: ${{ secrets.X_CT0 }}
           FETCH_MODE: ${{ github.event.client_payload.mode || github.event.inputs.mode || 'mentions' }}
-          ACCOUNT: ${{ github.event.client_payload.account || github.event.inputs.account || '' }}
           TWEET_ID: ${{ github.event.client_payload.tweet_id || github.event.inputs.tweet_id || '' }}
+          QUOTE_TEXT: ${{ github.event.client_payload.quote_text || github.event.inputs.quote_text || '' }}
+          ACCOUNT: ${{ github.event.client_payload.account || '' }}
           N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
         run: python fetch_content.py
 
-      - name: Upload result artifact
+      - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: fetch-result-${{ github.run_id }}
+          name: result-${{ github.run_id }}
           path: result.json
           retention-days: 1
 
