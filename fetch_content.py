@@ -103,9 +103,11 @@ def fetch_rss_tweets(account, max_items=5):
                                        "Accept": "application/rss+xml, application/xml, */*"}) as client:
                 resp = client.get(rss_url)
             print(f"  HTTP {resp.status_code}, len={len(resp.text)}")
-            if resp.status_code != 200:
-                continue
             xml = resp.text
+            # Accept 200 or 403 (some Nitter instances return 403 but still serve RSS)
+            # Reject if explicitly blocked or has no items
+            if resp.status_code not in (200, 403):
+                continue
             if "not yet whitelisted" in xml or "<item>" not in xml:
                 print("  Blocked or empty feed, trying next instance")
                 continue
