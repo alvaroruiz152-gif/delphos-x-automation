@@ -2,18 +2,24 @@ name: Fetch X Content
 
 on:
   repository_dispatch:
-    types: [fetch_mentions, fetch_account_tweets, do_retweet, do_quote_tweet]
+    types: [fetch_mentions, fetch_account_tweets, do_retweet, do_quote_tweet, do_reply]
   workflow_dispatch:
     inputs:
       mode:
-        description: 'mentions | do_retweet | do_quote_tweet'
+        description: "mentions | do_retweet | do_quote_tweet | do_reply"
         required: true
-        default: 'mentions'
+        default: "mentions"
       tweet_id:
-        description: 'Tweet ID (for do_retweet / do_quote_tweet)'
+        description: "Tweet ID (for do_retweet / do_quote_tweet)"
         required: false
       quote_text:
-        description: 'Comment text (for do_quote_tweet)'
+        description: "Comment text (for do_quote_tweet)"
+        required: false
+      reply_tweet_id:
+        description: "Tweet ID to reply to (for do_reply)"
+        required: false
+      reply_text:
+        description: "Reply text (for do_reply)"
         required: false
 
 jobs:
@@ -30,7 +36,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install deps
         run: pip install httpx twikit
@@ -42,6 +48,8 @@ jobs:
           FETCH_MODE: ${{ github.event.client_payload.mode || github.event.inputs.mode || 'mentions' }}
           TWEET_ID: ${{ github.event.client_payload.tweet_id || github.event.inputs.tweet_id || '' }}
           QUOTE_TEXT: ${{ github.event.client_payload.quote_text || github.event.inputs.quote_text || '' }}
+          REPLY_TWEET_ID: ${{ github.event.client_payload.reply_tweet_id || github.event.inputs.reply_tweet_id || '' }}
+          REPLY_TEXT: ${{ github.event.client_payload.reply_text || github.event.inputs.reply_text || '' }}
           ACCOUNT: ${{ github.event.client_payload.account || '' }}
           N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
         run: python fetch_content.py
