@@ -284,6 +284,64 @@ async def retweet_via_playwright(tweet_id):
             print("Retweet error: "+str(e))
         await browser.close()
     return "ok"
+
+
+async def follow_via_playwright(usernames: list):
+    """Sigue a una lista de cuentas por su @handle. Detecta si ya se sigue y lo salta."""
+    from playwright.async_api import async_playwright
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0 = os.environ["X_CT0"]
+    ua = random.choice(USER_AGENTS)
+    results = {}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=[
+            "--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"
+        ])
+        ctx = await browser.new_context(
+            user_agent=ua, viewport=random.choice(VIEWPORTS), locale="es-ES",
+            extra_http_headers={"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        )
+        await ctx.add_cookies([
+            {"name": "auth_token", "value": auth_token, "domain": ".x.com", "path": "/",
+             "secure": True, "httpOnly": True, "sameSite": "None"},
+            {"name": "ct0", "value": ct0, "domain": ".x.com", "path": "/",
+             "secure": True, "sameSite": "Lax"},
+        ])
+        page = await ctx.new_page()
+        page.set_default_timeout(20000)
+
+        for raw in usernames:
+            username = raw.strip().lstrip('@')
+            if not username:
+                continue
+            try:
+                await page.goto(f"https://x.com/{username}", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(random.uniform(2, 4))
+
+                follow_btn = page.locator('[data-testid$="-follow"]').first
+                unfollow_btn = page.locator('[data-testid$="-unfollow"]').first
+
+                if await follow_btn.count() > 0:
+                    await follow_btn.click(timeout=8000, force=True)
+                    await asyncio.sleep(random.uniform(1, 2))
+                    results[username] = "followed"
+                    print(f"Followed @{username}")
+                elif await unfollow_btn.count() > 0:
+                    results[username] = "already_following"
+                    print(f"Ya siguiendo a @{username}")
+                else:
+                    results[username] = "button_not_found"
+                    print(f"No se encontro boton follow para @{username}")
+            except Exception as e:
+                results[username] = f"error: {e}"
+                print(f"Error siguiendo @{username}: {e}")
+
+            anti_ban_delay(4.0, 9.0)
+
+        await browser.close()
+    return results
+
+
 async def main():
     text     = os.environ.get("TWEET_TEXT", "").strip()
     reply_to = os.environ.get("REPLY_TO", "") or None
@@ -299,6 +357,20 @@ async def main():
         sys.exit(0)
 
     print(f"[{datetime.now(MADRID_TZ).strftime('%H:%M')} Madrid] Action={action}")
+
+    # SEGUIR CUENTAS
+    if action == "follow":
+        usernames_raw = os.environ.get("FOLLOW_USERNAMES", "")
+        usernames = [u.strip() for u in usernames_raw.split(",") if u.strip()]
+        if not usernames:
+            print("ERROR: sin usernames para seguir"); sys.exit(1)
+        print(f"Siguiendo a {len(usernames)} cuentas: {usernames}")
+        anti_ban_delay()
+        results = await follow_via_playwright(usernames)
+        print(f"EXITO — follow: {results}")
+        with open("result.json", "w") as f:
+            json.dump({"status": "followed", "results": results}, f)
+        sys.exit(0)
 
     # HILO: publicar múltiples tweets en cadena
     if action == "thread" and tweets_raw:
