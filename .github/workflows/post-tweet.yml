@@ -41,6 +41,7 @@ jobs:
           TWEET_TEXT: ${{ github.event.client_payload.text || github.event.inputs.tweet_text }}
           REPLY_TO: ${{ github.event.client_payload.reply_to || github.event.inputs.reply_to || '' }}
           ACTION: ${{ github.event.client_payload.action || 'tweet' }}
+          FOLLOW_USERNAMES: ${{ github.event.client_payload.usernames || '' }}
         run: python post_tweet.py
 
       - name: Show result
