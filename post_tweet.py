@@ -435,7 +435,8 @@ async def main():
     # Para hilos: tweets separados por "---"
     tweets_raw = os.environ.get("TWEETS_THREAD", "")
 
-    if not check_hours():
+    # El guard de horario es anti-spam para publicaciones nuevas; no aplica a borrar contenido erroneo
+    if action != "delete" and not check_hours():
         now = datetime.now(MADRID_TZ).strftime("%H:%M")
         print(f"Fuera de horario ({now} Madrid, permitido 07:00-22:00)")
         with open("result.json", "w") as f:
