@@ -333,6 +333,45 @@ async def retweet_via_playwright(tweet_id):
     return "ok"
 
 
+async def delete_tweet_via_playwright(tweet_id):
+    from playwright.async_api import async_playwright
+    import re as _re
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0 = os.environ["X_CT0"]
+    ua = random.choice(USER_AGENTS)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        ctx = await browser.new_context(user_agent=ua, viewport=random.choice(VIEWPORTS), locale="es-ES",
+            extra_http_headers={"Accept-Language":"es-ES,es;q=0.9,en;q=0.8"})
+        await ctx.add_cookies([
+            {"name":"auth_token","value":auth_token,"domain":".x.com","path":"/",
+             "secure":True,"httpOnly":True,"sameSite":"None"},
+            {"name":"ct0","value":ct0,"domain":".x.com","path":"/","secure":True,"sameSite":"Lax"}
+        ])
+        page = await ctx.new_page()
+        page.set_default_timeout(20000)
+        await page.goto("https://x.com/i/web/status/"+tweet_id, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(random.uniform(2, 4))
+        result = "error"
+        try:
+            caret = page.locator('[data-testid="caret"]').first
+            await caret.click(timeout=8000)
+            await asyncio.sleep(random.uniform(1, 2))
+            delete_item = page.locator('[role="menuitem"]').filter(has_text=_re.compile("Eliminar|Delete", _re.I)).first
+            await delete_item.click(timeout=8000)
+            await asyncio.sleep(random.uniform(1, 2))
+            confirm = page.locator('[data-testid="confirmationSheetConfirm"]').first
+            await confirm.click(timeout=8000)
+            await page.wait_for_timeout(2000)
+            print("Eliminado: "+tweet_id)
+            result = "deleted"
+        except Exception as e:
+            print("Error eliminando "+tweet_id+": "+str(e))
+            result = "error: "+str(e)
+        await browser.close()
+    return result
+
+
 async def follow_via_playwright(usernames: list):
     """Sigue a una lista de cuentas por su @handle. Detecta si ya se sigue y lo salta."""
     from playwright.async_api import async_playwright
@@ -431,6 +470,18 @@ async def main():
         print(f"EXITO — hilo: {ids}")
         with open("result.json", "w") as f:
             json.dump({"tweet_ids": ids, "url": url, "count": len(ids)}, f)
+        sys.exit(0)
+
+    # ELIMINAR TWEET
+    if action == "delete":
+        tweet_id = os.environ.get("TWEET_ID", "").strip()
+        if not tweet_id:
+            print("ERROR: sin tweet_id para eliminar"); sys.exit(1)
+        print(f"Eliminando tweet {tweet_id}...")
+        anti_ban_delay()
+        result = await delete_tweet_via_playwright(tweet_id)
+        with open("result.json", "w") as f:
+            json.dump({"status": result, "tweet_id": tweet_id}, f)
         sys.exit(0)
 
     # RETWEET
