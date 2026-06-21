@@ -143,6 +143,27 @@ async def post_via_playwright(text: str, reply_to: str = None):
         page = await ctx.new_page()
         page.set_default_timeout(25000)
 
+        # Capturar el ID real del tweet desde la respuesta de la API (CreateTweet),
+        # en vez de adivinarlo rastreando el DOM — el rastreo del DOM devolvia el ID
+        # del tweet padre al responder dentro de un hilo, rompiendo la cadena.
+        captured_id = {"value": None}
+
+        async def _on_response(response):
+            if captured_id["value"]:
+                return
+            if "CreateTweet" not in response.url:
+                return
+            try:
+                body = await response.json()
+                result = body["data"]["create_tweet"]["tweet_results"]["result"]
+                rest_id = result.get("rest_id") or result.get("legacy", {}).get("id_str")
+                if rest_id:
+                    captured_id["value"] = rest_id
+            except Exception:
+                pass
+
+        page.on("response", _on_response)
+
         # Ir a X
         print("Abriendo x.com/home...")
         await page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=30000)
@@ -225,17 +246,27 @@ async def post_via_playwright(text: str, reply_to: str = None):
 
         await asyncio.sleep(random.uniform(4, 6))
 
-        # Obtener tweet_id
-        tweet_id = await page.evaluate("""
-            () => {
-                const links = Array.from(document.querySelectorAll('a[href*="/status/"]'));
-                const ids = links.map(l => {
-                    const m = l.href.match(/\\/status\\/([0-9]+)/);
-                    return m ? m[1] : null;
-                }).filter(Boolean);
-                return ids.length > 0 ? ids[ids.length - 1] : null;
-            }
-        """)
+        # Esperar un poco mas si la respuesta de CreateTweet aun no llego
+        for _ in range(10):
+            if captured_id["value"]:
+                break
+            await asyncio.sleep(0.5)
+
+        tweet_id = captured_id["value"]
+
+        if not tweet_id:
+            # Fallback: rastrear el DOM (menos fiable, puede devolver el ID del
+            # tweet padre en respuestas dentro de un hilo)
+            tweet_id = await page.evaluate("""
+                () => {
+                    const links = Array.from(document.querySelectorAll('a[href*="/status/"]'));
+                    const ids = links.map(l => {
+                        const m = l.href.match(/\\/status\\/([0-9]+)/);
+                        return m ? m[1] : null;
+                    }).filter(Boolean);
+                    return ids.length > 0 ? ids[ids.length - 1] : null;
+                }
+            """)
 
         await browser.close()
         return tweet_id or "published"
