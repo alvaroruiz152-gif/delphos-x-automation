@@ -66,6 +66,22 @@ async def simulate_human_behavior(page):
     await page.mouse.wheel(0, -random.randint(50, 150))
     await asyncio.sleep(random.uniform(0.5, 1.0))
 
+async def click_with_retry(locator, timeout=8000, retries=1, wait_between=2.0):
+    # Reintenta una vez tras un TimeoutError antes de dejar que falle de verdad —
+    # X a veces tarda en renderizar el boton y el click(timeout=8000) original
+    # mataba todo el script sin segunda oportunidad (causa de varios runs "failure" en GH Actions).
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            await locator.click(timeout=timeout)
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt < retries:
+                print(f"Click fallo (intento {attempt+1}), reintentando en {wait_between}s...")
+                await asyncio.sleep(wait_between)
+    raise last_exc
+
 async def post_via_playwright(text: str, reply_to: str = None):
     from playwright.async_api import async_playwright
 
@@ -183,20 +199,20 @@ async def post_via_playwright(text: str, reply_to: str = None):
                             wait_until="domcontentloaded")
             await asyncio.sleep(random.uniform(2, 4))
             reply_btn = page.locator('[data-testid="reply"]').first
-            await reply_btn.click(timeout=8000)
+            await click_with_retry(reply_btn)
             await asyncio.sleep(random.uniform(1, 2))
         else:
             # Usar el compose box del home
             compose = page.locator('[data-testid="tweetTextarea_0"]').first
             if await compose.count() > 0:
-                await compose.click(timeout=8000)
+                await click_with_retry(compose)
             else:
                 # Modal de redaccion
                 btn = page.locator('[data-testid="SideNav_NewTweet_Button"]').first
-                await btn.click(timeout=8000)
+                await click_with_retry(btn)
                 await asyncio.sleep(random.uniform(1, 2))
                 compose = page.locator('[data-testid="tweetTextarea_0"]').first
-                await compose.click(timeout=8000)
+                await click_with_retry(compose)
             await asyncio.sleep(random.uniform(0.5, 1.5))
 
         # Tipeo humano
