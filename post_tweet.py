@@ -576,19 +576,40 @@ async def main():
         import urllib.request as _req
 
         query = os.environ.get("QUERY", "").strip()
+        queries_raw = os.environ.get("QUERIES", "").strip()
         callback_path = os.environ.get("CALLBACK_PATH", "").strip()
         n8n_webhook = os.environ.get("N8N_WEBHOOK", "https://n8n.teamworkz.co/webhook").rstrip("/")
         extra_raw = os.environ.get("CALLBACK_EXTRA", "").strip()
 
-        if not query:
-            print("ERROR: QUERY vacio"); sys.exit(1)
+        # QUERIES (JSON: [{"tipo":"...", "query":"..."}, ...]) permite varias busquedas
+        # en un solo dispatch/run, para no tener que agregar varios callbacks en n8n
+        jobs = []
+        if queries_raw:
+            try:
+                jobs = json.loads(queries_raw)
+            except Exception as e:
+                print(f"ERROR: QUERIES invalido: {e}"); sys.exit(1)
+        elif query:
+            jobs = [{"tipo": "default", "query": query}]
+        else:
+            print("ERROR: QUERY/QUERIES vacio"); sys.exit(1)
 
-        print(f"Buscando: {query}")
-        anti_ban_delay(2.0, 5.0)
-        tweets = await search_tweets_via_playwright(query)
-        print(f"Encontrados: {len(tweets)} tuits")
+        all_tweets = []
+        for j in jobs:
+            q = (j.get("query") or "").strip()
+            tipo = j.get("tipo", "default")
+            if not q:
+                continue
+            print(f"Buscando [{tipo}]: {q}")
+            tweets = await search_tweets_via_playwright(q)
+            print(f"Encontrados [{tipo}]: {len(tweets)} tuits")
+            for t in tweets:
+                t["tipo"] = tipo
+            all_tweets.extend(tweets)
+            if j is not jobs[-1]:
+                anti_ban_delay(2.0, 4.0)
 
-        payload = {"query": query, "tweets": tweets, "count": len(tweets)}
+        payload = {"jobs": jobs, "tweets": all_tweets, "count": len(all_tweets)}
         if extra_raw:
             try:
                 payload["extra"] = json.loads(extra_raw)
