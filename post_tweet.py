@@ -526,9 +526,16 @@ async def search_tweets_via_playwright(query: str, count: int = 20):
                 try:
                     result = entry["content"]["itemContent"]["tweet_results"]["result"]
                     legacy = result.get("legacy") or result.get("tweet", {}).get("legacy", {})
-                    user_legacy = (result.get("core", {}).get("user_results", {})
-                                   .get("result", {}).get("legacy", {}))
-                    screen_name = user_legacy.get("screen_name", "unknown")
+                    user_result = (result.get("core", {}).get("user_results", {})
+                                    .get("result", {})) or {}
+                    # X movio screen_name de "legacy" a "core" en el objeto de usuario en algun
+                    # momento de 2024-2025; probar ambas rutas (y un fallback plano por si acaso)
+                    screen_name = (
+                        user_result.get("core", {}).get("screen_name")
+                        or user_result.get("legacy", {}).get("screen_name")
+                        or user_result.get("screen_name")
+                        or "unknown"
+                    )
                     tweet_id = result.get("rest_id") or legacy.get("id_str", "")
                     text = legacy.get("full_text", "")
                     favorite_count = legacy.get("favorite_count", 0)
