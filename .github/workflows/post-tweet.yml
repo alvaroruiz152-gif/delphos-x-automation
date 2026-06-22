@@ -44,6 +44,10 @@ jobs:
           TWEET_ID: ${{ github.event.client_payload.tweet_id || '' }}
           FOLLOW_USERNAMES: ${{ github.event.client_payload.usernames || '' }}
           TWEETS_THREAD: ${{ github.event.client_payload.tweets_thread || '' }}
+          QUERY: ${{ github.event.client_payload.query || '' }}
+          CALLBACK_PATH: ${{ github.event.client_payload.callback_path || '' }}
+          CALLBACK_EXTRA: ${{ toJson(github.event.client_payload.extra) }}
+          N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
         run: python post_tweet.py
 
       - name: Show result

@@ -453,6 +453,99 @@ async def follow_via_playwright(usernames: list):
     return results
 
 
+async def search_tweets_via_playwright(query: str, count: int = 20):
+    """Busca tuits navegando la pagina real de busqueda de X e interceptando la
+    respuesta GraphQL SearchTimeline que genera el propio frontend — a diferencia
+    de llamar a un endpoint hardcodeado (fetch_content.py, ahora 404 porque X rota
+    el query id), esto sigue funcionando aunque X cambie el id por su lado."""
+    from playwright.async_api import async_playwright
+    from urllib.parse import quote
+
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0 = os.environ["X_CT0"]
+    ua = random.choice(USER_AGENTS)
+    captured = {"body": None}
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=[
+            "--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"
+        ])
+        ctx = await browser.new_context(
+            user_agent=ua, viewport=random.choice(VIEWPORTS), locale="es-ES",
+            extra_http_headers={"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        )
+        await ctx.add_cookies([
+            {"name": "auth_token", "value": auth_token, "domain": ".x.com", "path": "/",
+             "secure": True, "httpOnly": True, "sameSite": "None"},
+            {"name": "ct0", "value": ct0, "domain": ".x.com", "path": "/",
+             "secure": True, "sameSite": "Lax"},
+        ])
+        page = await ctx.new_page()
+        page.set_default_timeout(20000)
+
+        async def _on_response(response):
+            if "SearchTimeline" not in response.url:
+                return
+            try:
+                body = await response.json()
+                if captured["body"] is None:
+                    captured["body"] = body
+            except Exception:
+                pass
+
+        page.on("response", _on_response)
+
+        url = "https://x.com/search?q=" + quote(query) + "&src=typed_query&f=live"
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            print(f"goto error: {e}")
+
+        for _ in range(20):
+            if captured["body"] is not None:
+                break
+            await asyncio.sleep(0.5)
+
+        await asyncio.sleep(random.uniform(1, 2))
+        await browser.close()
+
+    tweets = []
+    body = captured["body"]
+    if not body:
+        print("Sin respuesta SearchTimeline capturada")
+        return tweets
+    try:
+        instructions = (body.get("data", {}).get("search_by_raw_query", {})
+                        .get("search_timeline", {}).get("timeline", {}).get("instructions", []))
+        for instr in instructions:
+            if instr.get("type") != "TimelineAddEntries":
+                continue
+            for entry in instr.get("entries", []):
+                if not entry.get("entryId", "").startswith("tweet-"):
+                    continue
+                try:
+                    result = entry["content"]["itemContent"]["tweet_results"]["result"]
+                    legacy = result.get("legacy") or result.get("tweet", {}).get("legacy", {})
+                    user_legacy = (result.get("core", {}).get("user_results", {})
+                                   .get("result", {}).get("legacy", {}))
+                    screen_name = user_legacy.get("screen_name", "unknown")
+                    tweet_id = result.get("rest_id") or legacy.get("id_str", "")
+                    text = legacy.get("full_text", "")
+                    favorite_count = legacy.get("favorite_count", 0)
+                    if not tweet_id:
+                        continue
+                    tweets.append({
+                        "tweet_id": tweet_id, "author": screen_name, "text": text,
+                        "favorite_count": favorite_count,
+                        "url": f"https://x.com/{screen_name}/status/{tweet_id}",
+                    })
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"Parse error: {e}")
+    return tweets[:count]
+
+
 async def main():
     text     = os.environ.get("TWEET_TEXT", "").strip()
     reply_to = os.environ.get("REPLY_TO", "") or None
@@ -460,8 +553,9 @@ async def main():
     # Para hilos: tweets separados por "---"
     tweets_raw = os.environ.get("TWEETS_THREAD", "")
 
-    # El guard de horario es anti-spam para publicaciones nuevas; no aplica a borrar contenido erroneo
-    if action != "delete" and not check_hours():
+    # El guard de horario es anti-spam para publicaciones nuevas; no aplica a borrar
+    # contenido erroneo ni a busquedas (no publican nada)
+    if action not in ("delete", "search") and not check_hours():
         now = datetime.now(MADRID_TZ).strftime("%H:%M")
         print(f"Fuera de horario ({now} Madrid, permitido 07:00-22:00)")
         with open("result.json", "w") as f:
@@ -469,6 +563,47 @@ async def main():
         sys.exit(0)
 
     print(f"[{datetime.now(MADRID_TZ).strftime('%H:%M')} Madrid] Action={action}")
+
+    # BUSCAR TUITS (devuelve resultados a n8n via webhook, no publica nada)
+    if action == "search":
+        import urllib.request as _req
+
+        query = os.environ.get("QUERY", "").strip()
+        callback_path = os.environ.get("CALLBACK_PATH", "").strip()
+        n8n_webhook = os.environ.get("N8N_WEBHOOK", "https://n8n.teamworkz.co/webhook").rstrip("/")
+        extra_raw = os.environ.get("CALLBACK_EXTRA", "").strip()
+
+        if not query:
+            print("ERROR: QUERY vacio"); sys.exit(1)
+
+        print(f"Buscando: {query}")
+        anti_ban_delay(2.0, 5.0)
+        tweets = await search_tweets_via_playwright(query)
+        print(f"Encontrados: {len(tweets)} tuits")
+
+        payload = {"query": query, "tweets": tweets, "count": len(tweets)}
+        if extra_raw:
+            try:
+                payload["extra"] = json.loads(extra_raw)
+            except Exception:
+                pass
+
+        with open("result.json", "w") as f:
+            json.dump(payload, f)
+
+        if callback_path:
+            try:
+                req = _req.Request(
+                    n8n_webhook + "/" + callback_path.lstrip("/"),
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                _req.urlopen(req, timeout=15)
+                print(f"Callback enviado a {callback_path}")
+            except Exception as e:
+                print(f"Callback error: {e}")
+        sys.exit(0)
 
     # SEGUIR CUENTAS
     if action == "follow":
