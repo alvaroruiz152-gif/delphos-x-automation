@@ -360,8 +360,33 @@ async def delete_tweet_via_playwright(tweet_id):
             delete_item = page.locator('[role="menuitem"]').filter(has_text=_re.compile("Eliminar|Delete", _re.I)).first
             await delete_item.click(timeout=8000)
             await asyncio.sleep(random.uniform(1, 2))
-            confirm = page.locator('[data-testid="confirmationSheetConfirm"]').first
-            await confirm.click(timeout=8000)
+
+            # El testid del boton de confirmar puede variar; probamos varios candidatos
+            # y si ninguno aparece, volcamos los testids visibles para depurar.
+            confirm_selectors = [
+                '[data-testid="confirmationSheetConfirm"]',
+                '[data-testid="confirmSheetConfirm"]',
+                'div[role="button"]:has-text("Eliminar")',
+                'div[role="button"]:has-text("Delete")',
+            ]
+            clicked = False
+            for sel in confirm_selectors:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    try:
+                        await loc.click(timeout=5000)
+                        clicked = True
+                        break
+                    except Exception:
+                        continue
+            if not clicked:
+                testids = await page.evaluate("""
+                    () => Array.from(document.querySelectorAll('[data-testid]'))
+                        .map(e => e.getAttribute('data-testid'))
+                        .filter((v,i,a) => a.indexOf(v)===i)
+                """)
+                raise Exception("No se encontro boton de confirmar. Testids visibles: " + ", ".join(testids[:40]))
+
             await page.wait_for_timeout(2000)
             print("Eliminado: "+tweet_id)
             result = "deleted"
