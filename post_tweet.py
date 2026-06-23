@@ -288,19 +288,30 @@ async def post_via_playwright(text: str, reply_to: str = None):
         return tweet_id or "published"
 
 async def post_thread(tweets: list):
-    """Publica un hilo: cada tweet responde al anterior"""
+    """Publica un hilo: cada tweet responde al anterior.
+
+    Si la respuesta de X tarda/se bloquea por anti-spam, post_via_playwright cae
+    al rastreo del DOM y puede devolver el ID del tweet AL QUE SE RESPONDE (no uno
+    nuevo) -- eso significa que esa respuesta concreta NO se publico de verdad,
+    aunque no lance excepcion. Detectarlo aqui evita reportar "hilo publicado"
+    cuando en realidad solo el primer tweet llego a X.
+    """
     ids = []
+    broken_at = None
     reply_to = None
     for i, text in enumerate(tweets):
         if len(text) > 280: text = text[:277] + "..."
         print(f"Tweet hilo {i+1}/{len(tweets)}: {text[:50]}...")
         anti_ban_delay()
         tweet_id = await post_via_playwright(text, reply_to)
+        if broken_at is None and reply_to is not None and tweet_id == reply_to:
+            broken_at = i + 1
+            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero un ID nuevo (posible fallo silencioso de X) -- hilo roto desde aqui")
         ids.append(tweet_id)
         reply_to = tweet_id
         if i < len(tweets)-1:
-            time.sleep(random.uniform(3, 7))  # pausa entre tweets del hilo
-    return ids
+            time.sleep(random.uniform(10, 18))  # pausa mas larga: evita el anti-spam de X al responder muy rapido
+    return ids, broken_at
 
 
 async def retweet_via_playwright(tweet_id):
@@ -308,6 +319,8 @@ async def retweet_via_playwright(tweet_id):
     auth_token = os.environ["X_AUTH_TOKEN"]
     ct0 = os.environ["X_CT0"]
     ua = random.choice(USER_AGENTS)
+    ok = False
+    error_msg = ""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
         ctx = await browser.new_context(user_agent=ua, viewport=random.choice(VIEWPORTS),
@@ -326,11 +339,17 @@ async def retweet_via_playwright(tweet_id):
             confirm = page.locator("[data-testid=\"retweetConfirm\"]").first
             await confirm.click()
             await page.wait_for_timeout(2000)
-            print("Retweet OK: "+tweet_id)
+            # Verificacion real: tras confirmar, el boton de retweet debe quedar
+            # marcado como activo (data-testid="unretweet"); si no aparece, el
+            # click no surtio efecto (antes esto se reportaba "ok" igualmente).
+            unretweet = page.locator("[data-testid=\"unretweet\"]").first
+            ok = await unretweet.count() > 0
+            print(("Retweet OK: " if ok else "Retweet NO confirmado: ") + tweet_id)
         except Exception as e:
-            print("Retweet error: "+str(e))
+            error_msg = str(e)
+            print("Retweet error: "+error_msg)
         await browser.close()
-    return "ok"
+    return ok, error_msg
 
 
 async def delete_tweet_via_playwright(tweet_id):
@@ -654,11 +673,14 @@ async def main():
         if not tweets: print("ERROR: sin tweets para hilo"); sys.exit(1)
         print(f"Publicando hilo de {len(tweets)} tweets...")
         anti_ban_delay()
-        ids = await post_thread(tweets)
+        ids, broken_at = await post_thread(tweets)
         url = f"https://x.com/DelphosInnova/status/{ids[0]}" if ids else ""
-        print(f"EXITO — hilo: {ids}")
         with open("result.json", "w") as f:
-            json.dump({"tweet_ids": ids, "url": url, "count": len(ids)}, f)
+            json.dump({"tweet_ids": ids, "url": url, "count": len(ids), "broken_at": broken_at}, f)
+        if broken_at:
+            print(f"FALLO PARCIAL — hilo roto desde el tweet {broken_at}/{len(ids)}: {ids}")
+            sys.exit(1)
+        print(f"EXITO — hilo: {ids}")
         sys.exit(0)
 
     # ELIMINAR TWEET
@@ -683,9 +705,12 @@ async def main():
             print("ERROR: no tweet_id para retweet"); sys.exit(1)
         print("Retweeteando "+tweet_id)
         anti_ban_delay()
-        result = await retweet_via_playwright(tweet_id)
+        ok, error_msg = await retweet_via_playwright(tweet_id)
         with open("result.json", "w") as f:
-            json.dump({"status": "retweeted", "tweet_id": tweet_id}, f)
+            json.dump({"status": "retweeted" if ok else "error", "tweet_id": tweet_id, "error": error_msg}, f)
+        if not ok:
+            print("FALLO — el retweet no quedo confirmado: "+error_msg)
+            sys.exit(1)
         sys.exit(0)
 
     # TWEET SIMPLE
@@ -698,12 +723,20 @@ async def main():
     anti_ban_delay()
 
     tweet_id = await post_via_playwright(text, reply_to)
+    # Si es una respuesta y el ID capturado es el MISMO del tweet padre, el fallback
+    # de rastreo del DOM se quedo con el ID del tweet al que se respondia -- senal de
+    # que la respuesta no se publico de verdad (antes esto se reportaba como exito).
+    failed_reply = bool(reply_to) and tweet_id == reply_to
     url = (f"https://x.com/DelphosInnova/status/{tweet_id}"
            if tweet_id and tweet_id != "published" else "https://x.com/DelphosInnova")
 
+    with open("result.json", "w") as f:
+        json.dump({"tweet_id": tweet_id, "url": url, "text": text, "failed_reply": failed_reply}, f)
+
+    if failed_reply:
+        print(f"FALLO — la respuesta no genero un tweet nuevo (sigue siendo {tweet_id})")
+        sys.exit(1)
     print(f"EXITO — tweet_id: {tweet_id}")
     print(f"URL: {url}")
-    with open("result.json", "w") as f:
-        json.dump({"tweet_id": tweet_id, "url": url, "text": text}, f)
 
 asyncio.run(main())
