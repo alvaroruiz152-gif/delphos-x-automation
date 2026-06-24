@@ -433,15 +433,26 @@ async def delete_tweet_via_playwright(tweet_id):
             articles = await page.locator('article[data-testid="tweet"]').all()
             print(f"Total articles en la pagina: {len(articles)}")
             target_article = None
+            own_ids_seen = []
             for i, art in enumerate(articles):
                 avatar_testid = await art.evaluate(
                     """(el) => { const a = el.querySelector('[data-testid^="UserAvatar-Container-"]');
                                   return a ? a.getAttribute('data-testid') : null; }"""
                 )
+                own_link = await art.evaluate(
+                    """(el) => { const a = el.querySelector('a[href*="/status/"][href*="/DelphosInnova/"]')
+                                          || el.querySelector('time')?.closest('a');
+                                  return a ? a.getAttribute('href') : null; }"""
+                )
                 snippet = (await art.inner_text())[:60].replace("\n", " | ")
-                print(f"Article {i}: avatar={avatar_testid} | texto={snippet!r}")
-                if avatar_testid == "UserAvatar-Container-DelphosInnova" and target_article is None:
-                    target_article = art
+                print(f"Article {i}: avatar={avatar_testid} | link={own_link} | texto={snippet!r}")
+                if avatar_testid == "UserAvatar-Container-DelphosInnova":
+                    m = re.search(r"/status/(\d+)", own_link or "")
+                    if m:
+                        own_ids_seen.append(m.group(1))
+                    if target_article is None:
+                        target_article = art
+            print("IDs propios vistos en esta pagina: " + ", ".join(own_ids_seen))
             if target_article is None:
                 raise Exception("Ningun article tiene UserAvatar-Container-DelphosInnova como avatar propio")
             caret = target_article.locator('[data-testid="caret"]').first
