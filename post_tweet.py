@@ -392,10 +392,12 @@ async def delete_tweet_via_playwright(tweet_id):
             # link a nuestro status dentro de su propio article) son suficientes.
             # Confirmado en produccion real dos veces: se abria el menu de
             # @AmericaPapaBear ("Seguir/Silenciar/Bloquear", sin "Eliminar") en vez
-            # del nuestro. Escopamos por AUTOR: el article cuyo nombre de usuario es
-            # nuestra propia cuenta, que es invariante sea cual sea el layout.
+            # del nuestro. Escopamos por AUTOR usando el testid
+            # "UserAvatar-Container-DelphosInnova" (confirmado presente en la pagina
+            # en los 2 intentos anteriores via el volcado de testids) en vez del
+            # link/href del User-Name, que resulto no estar donde se esperaba.
             tweet_article = page.locator(
-                'article[data-testid="tweet"]:has([data-testid="User-Name"] a[href="/DelphosInnova"])'
+                'article[data-testid="tweet"]:has([data-testid="UserAvatar-Container-DelphosInnova"])'
             ).first
             if await tweet_article.count() == 0:
                 raise Exception("No se encontro article de @DelphosInnova en la pagina del permalink")
