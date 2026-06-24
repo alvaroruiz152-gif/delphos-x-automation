@@ -386,22 +386,30 @@ async def delete_tweet_via_playwright(tweet_id):
         result = "error"
         try:
             # La pagina del permalink puede mostrar mas tweets ademas del nuestro
-            # (respuestas, citas que incrustan nuestro link, recomendados, etc.) --
-            # ni [data-testid="caret"] ni el filtro por link al status (probado y
-            # tambien fallo: una cita/respuesta de OTRO usuario puede incrustar un
-            # link a nuestro status dentro de su propio article) son suficientes.
-            # Confirmado en produccion real dos veces: se abria el menu de
-            # @AmericaPapaBear ("Seguir/Silenciar/Bloquear", sin "Eliminar") en vez
-            # del nuestro. Escopamos por AUTOR usando el testid
-            # "UserAvatar-Container-DelphosInnova" (confirmado presente en la pagina
-            # en los 2 intentos anteriores via el volcado de testids) en vez del
-            # link/href del User-Name, que resulto no estar donde se esperaba.
-            tweet_article = page.locator(
-                'article[data-testid="tweet"]:has([data-testid="UserAvatar-Container-DelphosInnova"])'
-            ).first
-            if await tweet_article.count() == 0:
-                raise Exception("No se encontro article de @DelphosInnova en la pagina del permalink")
-            caret = tweet_article.locator('[data-testid="caret"]').first
+            # (respuestas, citas que incrustan nuestro link/avatar dentro de SU
+            # propio article, recomendados, etc.) -- 3 intentos previos de escopar
+            # por link al status, por href del User-Name y por :has() del testid de
+            # avatar fallaron igual (:has() busca en TODO el subarbol, incluyendo
+            # tarjetas de cita incrustadas de otro usuario). En vez de seguir
+            # adivinando un selector, inspeccionamos TODOS los articles de la
+            # pagina y nos quedamos con el que tiene nuestro avatar como PRIMER
+            # descendiente que matchea (document order = el propio, no uno
+            # incrustado mas abajo en una cita).
+            articles = await page.locator('article[data-testid="tweet"]').all()
+            print(f"Total articles en la pagina: {len(articles)}")
+            target_article = None
+            for i, art in enumerate(articles):
+                avatar_testid = await art.evaluate(
+                    """(el) => { const a = el.querySelector('[data-testid^="UserAvatar-Container-"]');
+                                  return a ? a.getAttribute('data-testid') : null; }"""
+                )
+                snippet = (await art.inner_text())[:60].replace("\n", " | ")
+                print(f"Article {i}: avatar={avatar_testid} | texto={snippet!r}")
+                if avatar_testid == "UserAvatar-Container-DelphosInnova" and target_article is None:
+                    target_article = art
+            if target_article is None:
+                raise Exception("Ningun article tiene UserAvatar-Container-DelphosInnova como avatar propio")
+            caret = target_article.locator('[data-testid="caret"]').first
             await caret.click(timeout=8000)
             await asyncio.sleep(random.uniform(1, 2))
 
