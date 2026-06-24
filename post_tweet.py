@@ -388,16 +388,45 @@ async def delete_tweet_via_playwright(tweet_id):
             caret = page.locator('[data-testid="caret"]').first
             await caret.click(timeout=8000)
             await asyncio.sleep(random.uniform(1, 2))
-            delete_item = page.locator('[role="menuitem"]').filter(has_text=_re.compile("Eliminar|Delete", _re.I)).first
+
+            # Diagnostico: que opciones de menu aparecieron de verdad (antes de
+            # asumir que "Eliminar" es la correcta -- X puede usar otro texto/idioma)
+            menu_texts = await page.locator('[role="menuitem"]').all_text_contents()
+            print("Menu items: " + " | ".join(t.strip() for t in menu_texts if t.strip()))
+
+            delete_item = page.locator('[role="menuitem"]').filter(
+                has_text=_re.compile("Eliminar|Borrar|Delete", _re.I)
+            ).first
+            if await delete_item.count() == 0:
+                raise Exception("No se encontro item 'Eliminar/Borrar/Delete' en el menu. Items vistos: " + " | ".join(t.strip() for t in menu_texts if t.strip()))
             await delete_item.click(timeout=8000)
-            await asyncio.sleep(random.uniform(1, 2))
+            await asyncio.sleep(random.uniform(1.5, 2.5))
+
+            # Diagnostico: contenido del dialogo de confirmacion (si existe), antes
+            # de buscar el boton concreto -- decisivo para saber si el problema es el
+            # selector del boton o que el dialogo nunca llego a abrirse.
+            dialog_text = await page.evaluate("""
+                () => {
+                    const d = document.querySelector('[role="alertdialog"]') || document.querySelector('[role="dialog"]');
+                    return d ? d.innerText : '';
+                }
+            """)
+            print("Dialogo tras click en Eliminar: " + repr(dialog_text[:300]))
 
             # El testid del boton de confirmar puede variar; probamos varios candidatos
-            # y si ninguno aparece, volcamos los testids visibles para depurar.
+            # (testid, texto dentro de un dialogo, y como ultimo recurso cualquier boton
+            # con ese texto en toda la pagina) y si ninguno aparece, volcamos diagnostico.
             confirm_selectors = [
                 '[data-testid="confirmationSheetConfirm"]',
                 '[data-testid="confirmSheetConfirm"]',
+                '[role="alertdialog"] [role="button"]:has-text("Eliminar")',
+                '[role="alertdialog"] [role="button"]:has-text("Borrar")',
+                '[role="alertdialog"] [role="button"]:has-text("Delete")',
+                '[role="dialog"] [role="button"]:has-text("Eliminar")',
+                '[role="dialog"] [role="button"]:has-text("Borrar")',
+                '[role="dialog"] [role="button"]:has-text("Delete")',
                 'div[role="button"]:has-text("Eliminar")',
+                'div[role="button"]:has-text("Borrar")',
                 'div[role="button"]:has-text("Delete")',
             ]
             clicked = False
@@ -405,7 +434,7 @@ async def delete_tweet_via_playwright(tweet_id):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     try:
-                        await loc.click(timeout=5000)
+                        await loc.click(timeout=5000, force=True)
                         clicked = True
                         break
                     except Exception:
@@ -416,7 +445,7 @@ async def delete_tweet_via_playwright(tweet_id):
                         .map(e => e.getAttribute('data-testid'))
                         .filter((v,i,a) => a.indexOf(v)===i)
                 """)
-                raise Exception("No se encontro boton de confirmar. Testids visibles: " + ", ".join(testids[:40]))
+                raise Exception("No se encontro boton de confirmar. Dialogo: " + repr(dialog_text[:200]) + " | Testids: " + ", ".join(testids[:40]))
 
             await page.wait_for_timeout(2000)
             print("Eliminado: "+tweet_id)
