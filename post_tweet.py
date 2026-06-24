@@ -385,6 +385,17 @@ async def delete_tweet_via_playwright(tweet_id):
         await asyncio.sleep(random.uniform(2, 4))
         result = "error"
         try:
+            # Esperar de verdad a que la SPA hidrate al menos un tweet -- en el
+            # intento anterior "Total articles en la pagina: 0" sugiere que se
+            # comprobo demasiado pronto (o hubo un bloqueo temporal por navegar
+            # repetidamente a la misma URL en pocos minutos durante las pruebas).
+            try:
+                await page.wait_for_selector('article[data-testid="tweet"]', timeout=15000)
+            except Exception:
+                page_title = await page.title()
+                body_snippet = (await page.evaluate("() => document.body.innerText || ''"))[:300]
+                raise Exception(f"Ningun article cargo tras 15s. Title={page_title!r} Body={body_snippet!r}")
+            await asyncio.sleep(random.uniform(1, 2))
             # La pagina del permalink puede mostrar mas tweets ademas del nuestro
             # (respuestas, citas que incrustan nuestro link/avatar dentro de SU
             # propio article, recomendados, etc.) -- 3 intentos previos de escopar
