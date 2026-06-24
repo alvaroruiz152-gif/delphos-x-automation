@@ -2,7 +2,7 @@
 # post_tweet.py v4 - Playwright con stealth anti-deteccion completo
 # 8 capas de proteccion para que X no detecte automatizacion
 
-import os, json, asyncio, random, time, sys
+import os, json, asyncio, random, time, sys, re
 from datetime import datetime
 import pytz
 
@@ -271,18 +271,42 @@ async def post_via_playwright(text: str, reply_to: str = None):
         tweet_id = captured_id["value"]
 
         if not tweet_id:
-            # Fallback: rastrear el DOM (menos fiable, puede devolver el ID del
-            # tweet padre en respuestas dentro de un hilo)
-            tweet_id = await page.evaluate("""
-                () => {
-                    const links = Array.from(document.querySelectorAll('a[href*="/status/"]'));
-                    const ids = links.map(l => {
-                        const m = l.href.match(/\\/status\\/([0-9]+)/);
-                        return m ? m[1] : null;
-                    }).filter(Boolean);
-                    return ids.length > 0 ? ids[ids.length - 1] : null;
-                }
-            """)
+            # Fallback CONFIRMADO ROTO en produccion real (24/06): rastrear
+            # CUALQUIER link /status/ de la pagina actual es muy poco fiable cuando
+            # se publica desde x.com/home, porque esa pagina sigue mostrando el
+            # timeline lleno de tweets de OTRAS cuentas debajo del compositor --
+            # `ids[ids.length-1]` puede devolver el ID de un tweet random de otra
+            # persona (confirmado: capturo un tweet de @AmericaPapaBear sin relacion
+            # alguna, que ademas se uso luego como "reply_to" para el resto del hilo).
+            # Fallback nuevo: ir al propio perfil (recencia garantiza que nuestro
+            # tweet recien publicado es el primero) y verificar que el texto del
+            # primer tweet del perfil coincide con lo que acabamos de escribir antes
+            # de confiar en su ID.
+            try:
+                await page.goto("https://x.com/DelphosInnova", wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
+                await asyncio.sleep(random.uniform(1.5, 2.5))
+                first_article = page.locator('article[data-testid="tweet"]').first
+                own_text = (await first_article.inner_text()).lower()
+                link = await first_article.locator('a[href*="/status/"]').first.get_attribute("href")
+                candidate_id = None
+                if link:
+                    m = re.search(r"/status/(\d+)", link)
+                    if m:
+                        candidate_id = m.group(1)
+                # Verificacion: los primeros ~20 caracteres significativos de lo que
+                # escribimos deben aparecer en el primer tweet del perfil -- si no
+                # coincide, el tweet recien publicado no es ese (posible delay de
+                # renderizado) y es mas seguro no devolver un ID falso.
+                check = re.sub(r"\s+", " ", text[:30].strip().lower())
+                if candidate_id and check and check[:15] in re.sub(r"\s+", " ", own_text):
+                    tweet_id = candidate_id
+                    print(f"ID recuperado via perfil propio (verificado por texto): {tweet_id}")
+                else:
+                    print(f"Fallback perfil: texto del primer tweet del perfil no coincide -- "
+                          f"esperado~'{check[:30]}' visto='{own_text[:60]}'")
+            except Exception as e:
+                print(f"Fallback perfil fallo: {e}")
 
         await browser.close()
         return tweet_id or "published"
