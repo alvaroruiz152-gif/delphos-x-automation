@@ -304,9 +304,21 @@ async def post_thread(tweets: list):
         print(f"Tweet hilo {i+1}/{len(tweets)}: {text[:50]}...")
         anti_ban_delay()
         tweet_id = await post_via_playwright(text, reply_to)
-        if broken_at is None and reply_to is not None and tweet_id == reply_to:
+
+        # Si el ID devuelto es el mismo del tweet padre, esa respuesta no se publico
+        # de verdad (anti-spam de X). En vez de marcar el hilo roto al primer intento,
+        # reintentamos un par de veces con espera mas larga -- la mayoria de bloqueos
+        # de X son temporales (rate-limit de unos segundos), no permanentes.
+        attempt = 1
+        while reply_to is not None and tweet_id == reply_to and attempt <= 2:
+            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo (intento {attempt}/2) -- reintentando tras espera extra...")
+            time.sleep(random.uniform(15, 25))
+            tweet_id = await post_via_playwright(text, reply_to)
+            attempt += 1
+
+        if reply_to is not None and tweet_id == reply_to:
             broken_at = i + 1
-            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero un ID nuevo (posible fallo silencioso de X) -- hilo roto desde aqui")
+            print(f"FALLO: tweet {i+1}/{len(tweets)} no genero un ID nuevo tras {attempt} intentos -- hilo roto desde aqui")
         ids.append(tweet_id)
         reply_to = tweet_id
         if i < len(tweets)-1:
