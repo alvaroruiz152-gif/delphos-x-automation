@@ -672,6 +672,66 @@ async def search_tweets_via_playwright(query: str, count: int = 20):
     return tweets[:count]
 
 
+async def list_profile_via_playwright(handle: str, count: int = 30):
+    """Lista los tweets visibles en un perfil (requiere sesion logueada, a
+    diferencia de Jina que no puede leer el timeline tras el muro de login).
+    Util para encontrar el tweet_id REAL de un tweet conocido por su texto,
+    cuando la busqueda (SearchTimeline) no devuelve resultados fiables."""
+    from playwright.async_api import async_playwright
+    auth_token = os.environ["X_AUTH_TOKEN"]
+    ct0 = os.environ["X_CT0"]
+    ua = random.choice(USER_AGENTS)
+    results = []
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=[
+            "--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"
+        ])
+        ctx = await browser.new_context(
+            user_agent=ua, viewport=random.choice(VIEWPORTS), locale="es-ES",
+            extra_http_headers={"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        )
+        await ctx.add_cookies([
+            {"name": "auth_token", "value": auth_token, "domain": ".x.com", "path": "/",
+             "secure": True, "httpOnly": True, "sameSite": "None"},
+            {"name": "ct0", "value": ct0, "domain": ".x.com", "path": "/",
+             "secure": True, "sameSite": "Lax"},
+        ])
+        page = await ctx.new_page()
+        page.set_default_timeout(20000)
+        await page.goto(f"https://x.com/{handle}", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_selector('article[data-testid="tweet"]', timeout=15000)
+        await asyncio.sleep(random.uniform(1.5, 2.5))
+
+        seen_ids = set()
+        scrolls = 0
+        while len(results) < count and scrolls < 8:
+            articles = await page.locator('article[data-testid="tweet"]').all()
+            for art in articles:
+                try:
+                    link = await art.locator(f'a[href*="/{handle}/status/"]').first.get_attribute("href")
+                    if not link:
+                        continue
+                    m = re.search(r"/status/(\d+)", link)
+                    if not m:
+                        continue
+                    tid = m.group(1)
+                    if tid in seen_ids:
+                        continue
+                    seen_ids.add(tid)
+                    text_snippet = (await art.inner_text())[:200].replace("\n", " | ")
+                    results.append({"tweet_id": tid, "text": text_snippet})
+                except Exception:
+                    continue
+            if len(results) >= count:
+                break
+            await page.mouse.wheel(0, 2000)
+            await asyncio.sleep(random.uniform(1.5, 2.5))
+            scrolls += 1
+
+        await browser.close()
+    return results[:count]
+
+
 async def main():
     text     = os.environ.get("TWEET_TEXT", "").strip()
     reply_to = os.environ.get("REPLY_TO", "") or None
@@ -680,8 +740,8 @@ async def main():
     tweets_raw = os.environ.get("TWEETS_THREAD", "")
 
     # El guard de horario es anti-spam para publicaciones nuevas; no aplica a borrar
-    # contenido erroneo ni a busquedas (no publican nada)
-    if action not in ("delete", "search") and not check_hours():
+    # contenido erroneo ni a busquedas/listados (no publican nada)
+    if action not in ("delete", "search", "list_profile") and not check_hours():
         now = datetime.now(MADRID_TZ).strftime("%H:%M")
         print(f"Fuera de horario ({now} Madrid, permitido 07:00-22:00)")
         with open("result.json", "w") as f:
@@ -750,6 +810,19 @@ async def main():
                 print(f"Callback enviado a {callback_path}")
             except Exception as e:
                 print(f"Callback error: {e}")
+        sys.exit(0)
+
+    # LISTAR PERFIL (diagnostico: encontrar el tweet_id real de un tweet conocido
+    # por su texto, cuando la busqueda SearchTimeline no devuelve nada fiable)
+    if action == "list_profile":
+        handle = os.environ.get("PROFILE_HANDLE", "DelphosInnova").strip()
+        count = int(os.environ.get("PROFILE_COUNT", "30") or 30)
+        results = await list_profile_via_playwright(handle, count)
+        print(f"Tweets encontrados en @{handle}: {len(results)}")
+        for r in results:
+            print(f"  {r['tweet_id']} | {r['text'][:120]}")
+        with open("result.json", "w") as f:
+            json.dump({"handle": handle, "tweets": results, "count": len(results)}, f)
         sys.exit(0)
 
     # SEGUIR CUENTAS

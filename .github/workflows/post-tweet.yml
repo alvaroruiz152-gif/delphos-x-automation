@@ -49,6 +49,8 @@ jobs:
           CALLBACK_PATH: ${{ github.event.client_payload.callback_path || '' }}
           CALLBACK_EXTRA: ${{ toJson(github.event.client_payload.extra) }}
           N8N_WEBHOOK: ${{ github.event.client_payload.n8n_webhook || 'https://n8n.teamworkz.co/webhook' }}
+          PROFILE_HANDLE: ${{ github.event.client_payload.handle || '' }}
+          PROFILE_COUNT: ${{ github.event.client_payload.count || '' }}
         run: python post_tweet.py
 
       - name: Show result
