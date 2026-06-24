@@ -385,7 +385,17 @@ async def delete_tweet_via_playwright(tweet_id):
         await asyncio.sleep(random.uniform(2, 4))
         result = "error"
         try:
-            caret = page.locator('[data-testid="caret"]').first
+            # La pagina del permalink puede mostrar mas tweets ademas del nuestro
+            # (tweet padre si es una respuesta, recomendados, etc.) -- [data-testid="caret"]
+            # SIN scope coge el primer caret de la pagina, que puede ser el de OTRO
+            # usuario (confirmado en produccion real: se abrio el menu de
+            # @AmericaPapaBear -- "Seguir/Silenciar/Bloquear", sin "Eliminar", porque
+            # no es nuestro tweet). Escopamos al article que contiene el link
+            # permalink a ESTE tweet_id en concreto, que es unico por tweet.
+            tweet_article = page.locator(f'article[data-testid="tweet"]:has(a[href*="/status/{tweet_id}"])').first
+            if await tweet_article.count() == 0:
+                raise Exception("No se encontro el article del tweet propio en la pagina")
+            caret = tweet_article.locator('[data-testid="caret"]').first
             await caret.click(timeout=8000)
             await asyncio.sleep(random.uniform(1, 2))
 
