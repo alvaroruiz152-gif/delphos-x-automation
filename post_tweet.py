@@ -386,15 +386,19 @@ async def delete_tweet_via_playwright(tweet_id):
         result = "error"
         try:
             # La pagina del permalink puede mostrar mas tweets ademas del nuestro
-            # (tweet padre si es una respuesta, recomendados, etc.) -- [data-testid="caret"]
-            # SIN scope coge el primer caret de la pagina, que puede ser el de OTRO
-            # usuario (confirmado en produccion real: se abrio el menu de
-            # @AmericaPapaBear -- "Seguir/Silenciar/Bloquear", sin "Eliminar", porque
-            # no es nuestro tweet). Escopamos al article que contiene el link
-            # permalink a ESTE tweet_id en concreto, que es unico por tweet.
-            tweet_article = page.locator(f'article[data-testid="tweet"]:has(a[href*="/status/{tweet_id}"])').first
+            # (respuestas, citas que incrustan nuestro link, recomendados, etc.) --
+            # ni [data-testid="caret"] ni el filtro por link al status (probado y
+            # tambien fallo: una cita/respuesta de OTRO usuario puede incrustar un
+            # link a nuestro status dentro de su propio article) son suficientes.
+            # Confirmado en produccion real dos veces: se abria el menu de
+            # @AmericaPapaBear ("Seguir/Silenciar/Bloquear", sin "Eliminar") en vez
+            # del nuestro. Escopamos por AUTOR: el article cuyo nombre de usuario es
+            # nuestra propia cuenta, que es invariante sea cual sea el layout.
+            tweet_article = page.locator(
+                'article[data-testid="tweet"]:has([data-testid="User-Name"] a[href="/DelphosInnova"])'
+            ).first
             if await tweet_article.count() == 0:
-                raise Exception("No se encontro el article del tweet propio en la pagina")
+                raise Exception("No se encontro article de @DelphosInnova en la pagina del permalink")
             caret = tweet_article.locator('[data-testid="caret"]').first
             await caret.click(timeout=8000)
             await asyncio.sleep(random.uniform(1, 2))
