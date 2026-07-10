@@ -66,14 +66,18 @@ async def simulate_human_behavior(page):
     await page.mouse.wheel(0, -random.randint(50, 150))
     await asyncio.sleep(random.uniform(0.5, 1.0))
 
-async def click_with_retry(locator, timeout=8000, retries=1, wait_between=2.0):
-    # Reintenta una vez tras un TimeoutError antes de dejar que falle de verdad —
+async def click_with_retry(locator, timeout=8000, retries=2, wait_between=2.0):
+    # Reintenta tras un TimeoutError antes de dejar que falle de verdad —
     # X a veces tarda en renderizar el boton y el click(timeout=8000) original
     # mataba todo el script sin segunda oportunidad (causa de varios runs "failure" en GH Actions).
+    # A partir del 2o intento usamos force=True: la causa mas comun del timeout es un
+    # <div data-testid="mask"> (overlay/dropdown residual de X) interceptando el click aunque
+    # el elemento ya sea visible y este habilitado - el propio boton de publicar tweet ya usaba
+    # force=True con exito, aqui aplicamos la misma tecnica al compose box y al boton de reply.
     last_exc = None
     for attempt in range(retries + 1):
         try:
-            await locator.click(timeout=timeout)
+            await locator.click(timeout=timeout, force=(attempt > 0))
             return
         except Exception as e:
             last_exc = e
