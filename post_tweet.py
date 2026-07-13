@@ -333,20 +333,27 @@ async def post_thread(tweets: list):
         anti_ban_delay()
         tweet_id = await post_via_playwright(text, reply_to)
 
-        # Si el ID devuelto es el mismo del tweet padre, esa respuesta no se publico
-        # de verdad (anti-spam de X). En vez de marcar el hilo roto al primer intento,
-        # reintentamos un par de veces con espera mas larga -- la mayoria de bloqueos
-        # de X son temporales (rate-limit de unos segundos), no permanentes.
+        # Sin ID fiable: o bien "published" (ni la captura de red ni la verificacion de
+        # perfil pudieron confirmar un ID real) o el mismo ID del tweet padre (anti-spam
+        # de X no creo la respuesta de verdad). En vez de marcar el hilo roto al primer
+        # intento, reintentamos un par de veces con espera mas larga -- la mayoria de
+        # bloqueos de X son temporales (rate-limit de unos segundos), no permanentes.
+        def id_no_fiable(tid):
+            return tid == "published" or (reply_to is not None and tid == reply_to)
+
         attempt = 1
-        while reply_to is not None and tweet_id == reply_to and attempt <= 2:
-            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo (intento {attempt}/2) -- reintentando tras espera extra...")
+        while id_no_fiable(tweet_id) and attempt <= 2:
+            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo/fiable (intento {attempt}/2) -- reintentando tras espera extra...")
             time.sleep(random.uniform(15, 25))
             tweet_id = await post_via_playwright(text, reply_to)
             attempt += 1
 
-        if reply_to is not None and tweet_id == reply_to:
+        if id_no_fiable(tweet_id):
             broken_at = i + 1
-            print(f"FALLO: tweet {i+1}/{len(tweets)} no genero un ID nuevo tras {attempt} intentos -- hilo roto desde aqui")
+            ids.append(tweet_id)
+            print(f"FALLO: tweet {i+1}/{len(tweets)} no genero un ID nuevo/fiable tras {attempt} intentos -- hilo roto desde aqui, se detiene la publicacion del resto para no encadenar respuestas a un ID invalido")
+            break
+
         ids.append(tweet_id)
         reply_to = tweet_id
         if i < len(tweets)-1:
