@@ -680,11 +680,21 @@ async def search_tweets_via_playwright(query: str, count: int = 20):
                     tweet_id = result.get("rest_id") or legacy.get("id_str", "")
                     text = legacy.get("full_text", "")
                     favorite_count = legacy.get("favorite_count", 0)
+                    # followers_count del autor -- necesario para no seguir cuentas gigantes
+                    # (nunca van a seguir de vuelta a una cuenta nueva) ni cuentas practicamente
+                    # muertas/bot (0-5 seguidores). Mismo patron dual-path que screen_name.
+                    followers_count = (
+                        user_result.get("core", {}).get("followers_count")
+                        if isinstance(user_result.get("core", {}), dict) else None
+                    )
+                    if followers_count is None:
+                        followers_count = user_result.get("legacy", {}).get("followers_count", 0)
                     if not tweet_id:
                         continue
                     tweets.append({
                         "tweet_id": tweet_id, "author": screen_name, "text": text,
                         "favorite_count": favorite_count,
+                        "followers_count": followers_count or 0,
                         "url": f"https://x.com/{screen_name}/status/{tweet_id}",
                     })
                 except Exception:
