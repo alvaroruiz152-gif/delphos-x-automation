@@ -289,7 +289,11 @@ async def post_via_playwright(text: str, reply_to: str = None):
             try:
                 await page.goto("https://x.com/DelphosInnova", wait_until="domcontentloaded", timeout=20000)
                 await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
-                await asyncio.sleep(random.uniform(1.5, 2.5))
+                # Antes 1.5-2.5s: en threads de 5 tweets fallaba repetidamente en el 2o
+                # tweet (2 de 2 casos observados en produccion, 13/07 y 20/07) -- el
+                # timeline del perfil no habia terminado de propagar el tweet recien
+                # publicado y devolvia el anterior como "primero", rompiendo la cadena.
+                await asyncio.sleep(random.uniform(3.5, 5.5))
                 first_article = page.locator('article[data-testid="tweet"]').first
                 own_text = (await first_article.inner_text()).lower()
                 link = await first_article.locator('a[href*="/status/"]').first.get_attribute("href")
