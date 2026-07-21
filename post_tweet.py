@@ -287,12 +287,16 @@ async def post_via_playwright(text: str, reply_to: str = None):
             # primer tweet del perfil coincide con lo que acabamos de escribir antes
             # de confiar en su ID.
             try:
-                await page.goto("https://x.com/DelphosInnova", wait_until="domcontentloaded", timeout=20000)
+                # BUG REAL encontrado 21/07 (no era de timing, ningun delay lo arreglaba):
+                # la pestana "Posts" del perfil (/DelphosInnova) NO incluye las respuestas
+                # -- X las muestra solo bajo "Respuestas" (/DelphosInnova/with_replies).
+                # Al responder dentro de un hilo (reply_to presente), este fallback siempre
+                # comprobaba la pestana equivocada y veia el ultimo post ORIGINAL (no la
+                # respuesta recien publicada), fallando 3 de 3 veces en threads reales
+                # (13/07, 20/07, 21/07). Con reply_to hay que mirar /with_replies.
+                perfil_url = "https://x.com/DelphosInnova/with_replies" if reply_to else "https://x.com/DelphosInnova"
+                await page.goto(perfil_url, wait_until="domcontentloaded", timeout=20000)
                 await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
-                # Antes 1.5-2.5s: en threads de 5 tweets fallaba repetidamente en el 2o
-                # tweet (2 de 2 casos observados en produccion, 13/07 y 20/07) -- el
-                # timeline del perfil no habia terminado de propagar el tweet recien
-                # publicado y devolvia el anterior como "primero", rompiendo la cadena.
                 await asyncio.sleep(random.uniform(3.5, 5.5))
                 first_article = page.locator('article[data-testid="tweet"]').first
                 own_text = (await first_article.inner_text()).lower()
