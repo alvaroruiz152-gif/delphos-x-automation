@@ -173,12 +173,24 @@ async def post_via_playwright(text: str, reply_to: str = None):
                 return
             if "CreateTweet" not in response.url:
                 return
+            # Diagnostico (21/07): loguear status/errores incluso si falla el parseo,
+            # para saber si X esta rechazando la peticion (403/429/errors en el body)
+            # en vez de que simplemente nunca llegue -- distingue "el click no disparo
+            # la peticion" de "la peticion se disparo pero X la rechazo".
+            try:
+                if response.status >= 400:
+                    print(f"CreateTweet respondio con error HTTP {response.status}")
+            except Exception:
+                pass
             try:
                 body = await response.json()
+                if body.get("errors"):
+                    print(f"CreateTweet devolvio errores GraphQL: {str(body['errors'])[:300]}")
                 result = body["data"]["create_tweet"]["tweet_results"]["result"]
                 rest_id = result.get("rest_id") or result.get("legacy", {}).get("id_str")
                 if rest_id:
                     captured_id["value"] = rest_id
+                    print(f"CreateTweet capturado directamente via red: {rest_id}")
             except Exception:
                 pass
 
@@ -238,24 +250,50 @@ async def post_via_playwright(text: str, reply_to: str = None):
             await page.keyboard.type(text)
             await asyncio.sleep(2)
 
-        # Mover el raton hacia el boton antes de pulsar (mas humano)
-        submit_selector = '[data-testid="tweetButtonInline"]'
-        try:
-            btn_box = await page.locator(submit_selector).first.bounding_box()
-            if btn_box:
-                await page.mouse.move(
-                    btn_box['x'] + btn_box['width'] / 2 + random.randint(-5, 5),
-                    btn_box['y'] + btn_box['height'] / 2 + random.randint(-3, 3)
-                )
-                await asyncio.sleep(random.uniform(0.3, 0.7))
-        except:
-            pass
+        # BUG REAL sospechado 21/07: al RESPONDER, X abre el compositor en un modal
+        # distinto del compose box del home -- el boton de publicar de ese modal
+        # probablemente usa testid "tweetButton" (sin "Inline"), no "tweetButtonInline".
+        # El codigo anterior solo probaba "tweetButtonInline" via Playwright .click()
+        # (con timeout real) y caia a un click() de JS crudo como unico fallback --
+        # un click() de JS directo no dispara los mismos eventos sinteticos de mouse
+        # que React puede necesitar para procesar el submit, lo que explicaria por que
+        # SIEMPRE fallaba la captura del ID justo en la primera respuesta de cada hilo
+        # (13/07, 20/07, 21/07 x2) mientras el primer tweet -- sin reply_to, boton
+        # "tweetButtonInline" real -- funcionaba bien. Ahora se prueban AMBOS selectores
+        # con Playwright.click() real (eventos de mouse autenticos), en el orden que
+        # tiene mas sentido segun el contexto (reply -> tweetButton primero).
+        submit_selectors = (
+            ['[data-testid="tweetButton"]', '[data-testid="tweetButtonInline"]']
+            if reply_to else
+            ['[data-testid="tweetButtonInline"]', '[data-testid="tweetButton"]']
+        )
 
-        # Click con force y fallback JS
+        for sel in submit_selectors:
+            try:
+                btn_box = await page.locator(sel).first.bounding_box(timeout=2000)
+                if btn_box:
+                    await page.mouse.move(
+                        btn_box['x'] + btn_box['width'] / 2 + random.randint(-5, 5),
+                        btn_box['y'] + btn_box['height'] / 2 + random.randint(-3, 3)
+                    )
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    break
+            except Exception:
+                continue
+
         print("Publicando...")
-        try:
-            await page.locator(submit_selector).first.click(force=True, timeout=8000)
-        except:
+        clicked = False
+        for sel in submit_selectors:
+            try:
+                await page.locator(sel).first.click(force=True, timeout=6000)
+                print(f"Click de publicar OK via selector: {sel}")
+                clicked = True
+                break
+            except Exception:
+                continue
+
+        if not clicked:
+            print("AVISO: ningun selector de boton respondio a click() de Playwright, usando fallback JS")
             await page.evaluate("""
                 () => {
                     const b = document.querySelector('[data-testid="tweetButtonInline"]')
