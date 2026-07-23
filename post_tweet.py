@@ -304,8 +304,14 @@ async def post_via_playwright(text: str, reply_to: str = None):
 
         await asyncio.sleep(random.uniform(4, 6))
 
-        # Esperar un poco mas si la respuesta de CreateTweet aun no llego
-        for _ in range(10):
+        # Esperar un poco mas si la respuesta de CreateTweet aun no llego.
+        # Ampliado 5s -> 9s (22/07): tras el fix del boton de respuesta (tweetButton),
+        # 4 de 5 respuestas de un hilo real capturaron el ID via red sin problema -- la
+        # 5a fallo, probablemente por un ligero retraso extra de X en la 5a peticion
+        # consecutiva dentro de la misma conversacion (posible rate-limit blando). Mas
+        # margen aqui reduce la necesidad de caer al fallback de perfil, que es menos
+        # fiable para respuestas dentro de conversaciones propias (ver mas abajo).
+        for _ in range(18):
             if captured_id["value"]:
                 break
             await asyncio.sleep(0.5)
@@ -336,25 +342,50 @@ async def post_via_playwright(text: str, reply_to: str = None):
                 await page.goto(perfil_url, wait_until="domcontentloaded", timeout=20000)
                 await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
                 await asyncio.sleep(random.uniform(3.5, 5.5))
-                first_article = page.locator('article[data-testid="tweet"]').first
-                own_text = (await first_article.inner_text()).lower()
-                link = await first_article.locator('a[href*="/status/"]').first.get_attribute("href")
-                candidate_id = None
-                if link:
-                    m = re.search(r"/status/(\d+)", link)
-                    if m:
-                        candidate_id = m.group(1)
-                # Verificacion: los primeros ~20 caracteres significativos de lo que
-                # escribimos deben aparecer en el primer tweet del perfil -- si no
-                # coincide, el tweet recien publicado no es ese (posible delay de
-                # renderizado) y es mas seguro no devolver un ID falso.
                 check = re.sub(r"\s+", " ", text[:30].strip().lower())
-                if candidate_id and check and check[:15] in re.sub(r"\s+", " ", own_text):
-                    tweet_id = candidate_id
-                    print(f"ID recuperado via perfil propio (verificado por texto): {tweet_id}")
+                candidate_id = None
+                if reply_to:
+                    # BUG REAL encontrado 22/07: dentro de una conversacion propia activa,
+                    # /with_replies muestra el TWEET RAIZ del hilo como "primer articulo"
+                    # visible, no la ultima respuesta -- comparar solo contra el primero
+                    # fallaba siempre para la ultima respuesta de un hilo largo aunque esa
+                    # respuesta SI se hubiera publicado bien. Ahora se recorren los
+                    # primeros N articulos visibles (la conversacion completa aparece ahi,
+                    # solo que no en la posicion 0) buscando el que coincide con el texto.
+                    articles = page.locator('article[data-testid="tweet"]')
+                    total = min(await articles.count(), 8)
+                    for i in range(total):
+                        art = articles.nth(i)
+                        try:
+                            art_text = (await art.inner_text()).lower()
+                        except Exception:
+                            continue
+                        if check and check[:15] in re.sub(r"\s+", " ", art_text):
+                            link = await art.locator('a[href*="/status/"]').first.get_attribute("href")
+                            if link:
+                                m = re.search(r"/status/(\d+)", link)
+                                if m:
+                                    candidate_id = m.group(1)
+                                    break
+                    if candidate_id:
+                        tweet_id = candidate_id
+                        print(f"ID recuperado via perfil propio (verificado por texto, articulo {i}): {tweet_id}")
+                    else:
+                        print(f"Fallback perfil: texto '{check[:30]}' no encontrado en los primeros {total} articulos de with_replies")
                 else:
-                    print(f"Fallback perfil: texto del primer tweet del perfil no coincide -- "
-                          f"esperado~'{check[:30]}' visto='{own_text[:60]}'")
+                    first_article = page.locator('article[data-testid="tweet"]').first
+                    own_text = (await first_article.inner_text()).lower()
+                    link = await first_article.locator('a[href*="/status/"]').first.get_attribute("href")
+                    if link:
+                        m = re.search(r"/status/(\d+)", link)
+                        if m:
+                            candidate_id = m.group(1)
+                    if candidate_id and check and check[:15] in re.sub(r"\s+", " ", own_text):
+                        tweet_id = candidate_id
+                        print(f"ID recuperado via perfil propio (verificado por texto): {tweet_id}")
+                    else:
+                        print(f"Fallback perfil: texto del primer tweet del perfil no coincide -- "
+                              f"esperado~'{check[:30]}' visto='{own_text[:60]}'")
             except Exception as e:
                 print(f"Fallback perfil fallo: {e}")
 
