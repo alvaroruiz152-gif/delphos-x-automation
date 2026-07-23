@@ -421,7 +421,10 @@ async def post_thread(tweets: list):
         attempt = 1
         while id_no_fiable(tweet_id) and attempt <= 2:
             print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo/fiable (intento {attempt}/2) -- reintentando tras espera extra...")
-            time.sleep(random.uniform(15, 25))
+            # Ampliado 15-25s -> 25-40s (23/07): si la causa es rate-limit acumulado de
+            # X tras varias respuestas seguidas, reintentar casi de inmediato con el
+            # mismo texto/mismo padre no da tiempo a que ese limite se enfrie.
+            time.sleep(random.uniform(25, 40))
             tweet_id = await post_via_playwright(text, reply_to)
             attempt += 1
 
@@ -434,7 +437,15 @@ async def post_thread(tweets: list):
         ids.append(tweet_id)
         reply_to = tweet_id
         if i < len(tweets)-1:
-            time.sleep(random.uniform(10, 18))  # pausa mas larga: evita el anti-spam de X al responder muy rapido
+            # Pausa progresiva (23/07): en 2 hilos reales consecutivos (22/07 y 23/07),
+            # los tweets 1-4 se publicaron siempre bien pero el ULTIMO fallo ambas veces
+            # tras varias respuestas seguidas -- patron consistente con X aplicando mas
+            # friccion/rate-limit cuantas mas respuestas rapidas hay en la misma
+            # conversacion. Antes: pausa fija 10-18s para todos. Ahora: crece con cada
+            # respuesta (i=0 -> ~10-18s, i=3 -> ~25-38s antes del ultimo tweet).
+            base_min, base_max = 10, 18
+            growth = i * 5
+            time.sleep(random.uniform(base_min + growth, base_max + growth))
     return ids, broken_at
 
 
