@@ -419,12 +419,16 @@ async def post_thread(tweets: list):
             return tid == "published" or (reply_to is not None and tid == reply_to)
 
         attempt = 1
-        while id_no_fiable(tweet_id) and attempt <= 2:
-            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo/fiable (intento {attempt}/2) -- reintentando tras espera extra...")
-            # Ampliado 15-25s -> 25-40s (23/07): si la causa es rate-limit acumulado de
-            # X tras varias respuestas seguidas, reintentar casi de inmediato con el
-            # mismo texto/mismo padre no da tiempo a que ese limite se enfrie.
-            time.sleep(random.uniform(25, 40))
+        MAX_RETRIES = 3
+        while id_no_fiable(tweet_id) and attempt <= MAX_RETRIES:
+            print(f"AVISO: tweet {i+1}/{len(tweets)} no genero ID nuevo/fiable (intento {attempt}/{MAX_RETRIES}) -- reintentando tras espera extra...")
+            # Ampliado 25-40s -> escalonado por intento (03/08): en el run del 03/08 (thread
+            # Horizonte Europa) el intento 1 y 2 con 25-40s fijos fallaron IDENTICOS 3 veces
+            # seguidas en el tweet 5/5 -- señal de que el bloqueo de X necesita mas tiempo del
+            # que 25-40s da para enfriarse tras 4 respuestas rapidas seguidas en la misma
+            # conversacion. Ahora la espera crece con el intento (intento1 ~25-40s, intento2
+            # ~45-65s, intento3 ~65-90s) en vez de repetir la misma espera corta 3 veces.
+            time.sleep(random.uniform(20 + attempt * 20, 35 + attempt * 20))
             tweet_id = await post_via_playwright(text, reply_to)
             attempt += 1
 
